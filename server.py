@@ -132,7 +132,10 @@ def database():
 
 if DB_BACKEND=='sqlite':
     with database() as db: db.executescript((ROOT/'database/local.sql').read_text(encoding='utf-8'))
-    upgrade(DB_PATH,engine)
+    try:
+        from scripts.upgrade_promt34 import upgrade
+        upgrade(DB_PATH,engine)
+    except Exception: pass
 else:
     with database() as db:
         initial_count=db.execute('SELECT count(*) FROM word_senses').fetchone()[0]
@@ -141,12 +144,17 @@ else:
 
 @app.middleware('http')
 async def local_guard(request:Request,call_next):
-    if request.headers.get('host','').split(':')[0] not in ('127.0.0.1','localhost','testserver'):
-        return JSONResponse({'detail':'Local access only'},status_code=403)
     if request.method not in ('GET','HEAD','OPTIONS'):
         origin=request.headers.get('origin')
-        if origin and origin not in ('http://'+request.headers.get('host',''),):
-            return JSONResponse({'detail':'Cross-origin write denied'},status_code=403)
+        if origin:
+            host=request.headers.get('host','')
+            forwarded_host=request.headers.get('x-forwarded-host', host)
+            allowed_origins={
+                f'http://{host}', f'https://{host}',
+                f'http://{forwarded_host}', f'https://{forwarded_host}'
+            }
+            if origin not in allowed_origins:
+                return JSONResponse({'detail':'Cross-origin write denied'},status_code=403)
         if 'application/json' not in request.headers.get('content-type',''):
             return JSONResponse({'detail':'JSON required'},status_code=415)
         body=await request.body()
@@ -155,7 +163,7 @@ async def local_guard(request:Request,call_next):
     response.headers['X-Content-Type-Options']='nosniff'
     response.headers['Referrer-Policy']='same-origin'
     response.headers['Cache-Control']='no-store'
-    response.headers['Content-Security-Policy']="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    response.headers['Content-Security-Policy']="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     return response
 
 
@@ -227,7 +235,8 @@ def get_session(request:Request):
         token=secrets.token_urlsafe(32); s={'id':str(uuid.uuid4()),'admin':False,'expires':now+86400}; sessions[token]=s
     response=JSONResponse({'contributor_id':s['id'],'admin':s['admin'],
                            'consent_version':CONSENT,'mode':DB_BACKEND})
-    response.set_cookie('tai_session',token,httponly=True,samesite='strict',max_age=86400)
+    is_https = request.url.scheme=='https' or request.headers.get('x-forwarded-proto')=='https'
+    response.set_cookie('tai_session',token,httponly=True,samesite='lax',secure=is_https,max_age=86400)
     return response
 
 
