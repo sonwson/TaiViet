@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS sentence_corrections (
  id TEXT PRIMARY KEY, sentence_id TEXT NOT NULL REFERENCES sentences(id), base_tai_text TEXT,
  suggested_tai_text TEXT NOT NULL CHECK(length(trim(suggested_tai_text)) BETWEEN 1 AND 5000),
  suggested_romanization TEXT NOT NULL CHECK(length(trim(suggested_romanization)) BETWEEN 1 AND 5000),
- suggested_meaning TEXT NOT NULL CHECK(length(trim(suggested_meaning)) BETWEEN 1 AND 5000),
+ suggested_meaning TEXT DEFAULT '',
  contributor_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

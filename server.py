@@ -36,8 +36,32 @@ if not ADMIN_TOKEN:
 ADMIN_USERNAME=os.environ.get('TAI_ADMIN_USER','admin')
 ADMIN_PASSWORD=os.environ.get('TAI_ADMIN_PASS','admin123')
 import hashlib
+import jwt
 def hash_pass(p): return hashlib.sha256(p.encode('utf-8')).hexdigest()
 ADMIN_HASH=hash_pass(ADMIN_PASSWORD)
+JWT_SECRET=os.environ.get('TAI_JWT_SECRET',ADMIN_HASH+'_tai_jwt_key_2026')
+JWT_ALGORITHM='HS256'
+JWT_EXPIRATION_SECONDS=86400*7
+
+def create_admin_jwt(user_id=None,username=ADMIN_USERNAME):
+    now=int(time.time())
+    payload={'sub':user_id or str(uuid.uuid4()),'username':username,'role':'admin','admin':True,'iat':now,'exp':now+JWT_EXPIRATION_SECONDS}
+    return jwt.encode(payload,JWT_SECRET,algorithm=JWT_ALGORITHM)
+
+def verify_admin_jwt(token):
+    if not token: return None
+    try:
+        data=jwt.decode(token,JWT_SECRET,algorithms=[JWT_ALGORITHM])
+        if data.get('admin') is True or data.get('role')=='admin': return data
+    except Exception: return None
+    return None
+
+def get_admin_jwt_claims(request):
+    auth_header=request.headers.get('authorization','')
+    jwt_token=None
+    if auth_header.startswith('Bearer '): jwt_token=auth_header[7:].strip()
+    if not jwt_token: jwt_token=request.cookies.get('tai_admin_token')
+    return verify_admin_jwt(jwt_token)
 engine=Engine()
 app=FastAPI(title='Tai Việt — cộng đồng dữ liệu',docs_url='/api/docs')
 sessions={}; limits=defaultdict(deque)
@@ -142,7 +166,7 @@ if DB_BACKEND=='sqlite':
         db.executescript((ROOT/'database/local.sql').read_text(encoding='utf-8'))
         db.execute('''CREATE TABLE IF NOT EXISTS sentence_corrections (
             id TEXT PRIMARY KEY, sentence_id TEXT NOT NULL REFERENCES sentences(id), base_tai_text TEXT,
-            suggested_tai_text TEXT NOT NULL, suggested_romanization TEXT NOT NULL, suggested_meaning TEXT NOT NULL,
+            suggested_tai_text TEXT NOT NULL, suggested_romanization TEXT NOT NULL, suggested_meaning TEXT DEFAULT '',
             contributor_id TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )''')
     if upgrade:
@@ -215,12 +239,22 @@ async def local_guard(request:Request,call_next):
 
 
 def session(request):
-    s=sessions.get(request.cookies.get('tai_session'))
-    if not s or s['expires']<time.time(): raise HTTPException(401,'Phiên đã hết hạn; tải lại trang.')
+    admin_claims=get_admin_jwt_claims(request)
+    token=request.cookies.get('tai_session')
+    s=sessions.get(token)
+    if not s or s['expires']<time.time():
+        if admin_claims:
+            s={'id':admin_claims.get('sub') or str(uuid.uuid4()),'admin':True,'expires':time.time()+86400*7}
+            return s
+        raise HTTPException(401,'Phiên đã hết hạn; tải lại trang.')
+    if admin_claims: s['admin']=True
     return s
 
 
 def admin(request):
+    admin_claims=get_admin_jwt_claims(request)
+    if admin_claims:
+        return {'id':admin_claims.get('sub'),'username':admin_claims.get('username'),'admin':True}
     s=session(request)
     if not s.get('admin'): raise HTTPException(403,'Chỉ quản trị viên được thực hiện thao tác này.')
     return s
@@ -284,7 +318,10 @@ def get_session(request:Request):
     if not s:
         throttle('sessions:'+get_client_ip(request),30)
         token=secrets.token_urlsafe(32); s={'id':str(uuid.uuid4()),'admin':False,'expires':now+86400}; sessions[token]=s
-    response=JSONResponse({'contributor_id':s['id'],'admin':s['admin'],
+    admin_claims=get_admin_jwt_claims(request)
+    is_admin=bool(admin_claims or s.get('admin'))
+    if is_admin: s['admin']=True
+    response=JSONResponse({'contributor_id':s['id'],'admin':is_admin,
                            'consent_version':CONSENT,'mode':DB_BACKEND})
     is_https = request.url.scheme=='https' or request.headers.get('x-forwarded-proto')=='https'
     response.set_cookie('tai_session',token,httponly=True,samesite='lax',secure=is_https,max_age=86400)
@@ -318,14 +355,23 @@ async def login(request:Request):
         record_login_failure(ip)
         raise HTTPException(401,'Tên đăng nhập hoặc mật khẩu không chính xác.')
     record_login_success(ip)
-    s=session(request); s['admin']=True
-    return {'ok':True,'username':ADMIN_USERNAME}
+    user_id=str(uuid.uuid4())
+    s=sessions.get(request.cookies.get('tai_session'))
+    if s: s['admin']=True; user_id=s['id']
+    jwt_token=create_admin_jwt(user_id=user_id,username=ADMIN_USERNAME)
+    is_https = request.url.scheme=='https' or request.headers.get('x-forwarded-proto')=='https'
+    response=JSONResponse({'ok':True,'token':jwt_token,'username':ADMIN_USERNAME})
+    response.set_cookie('tai_admin_token',jwt_token,httponly=True,samesite='lax',secure=is_https,max_age=JWT_EXPIRATION_SECONDS)
+    return response
 
 
 @app.post('/api/admin/logout')
 def logout(request:Request):
-    session(request)['admin']=False
-    return {'ok':True}
+    s=sessions.get(request.cookies.get('tai_session'))
+    if s: s['admin']=False
+    response=JSONResponse({'ok':True})
+    response.delete_cookie('tai_admin_token')
+    return response
 
 
 @app.post('/api/engine')
@@ -513,7 +559,7 @@ async def correct_sentence(request:Request):
     sid=text(p,'sentence_id',True,40)
     tai=text(p,'suggested_tai_text',True,5000)
     roman=text(p,'suggested_romanization',True,5000)
-    meaning=text(p,'suggested_meaning',True,5000)
+    meaning=text(p,'suggested_meaning',False,5000) or ''
     s=submission(request,p)
     is_admin=bool(s.get('admin'))
     status='approved' if is_admin else 'pending'
@@ -525,17 +571,18 @@ async def correct_sentence(request:Request):
             contributor_id=s['id'],status=status
         ))
         if is_admin:
-            insert(db,'translations',dict(
-                sentence_id=sid,vietnamese_text=meaning,origin='admin_correction',
-                contributor_id=s['id'],status='approved'
-            ))
+            if meaning and meaning.strip():
+                insert(db,'translations',dict(
+                    sentence_id=sid,vietnamese_text=meaning.strip(),origin='admin_correction',
+                    contributor_id=s['id'],status='approved'
+                ))
             insert(db,'moderation_events',dict(
                 entity_table='sentence_corrections',entity_id=cid,
                 previous_status='pending',new_status='approved',admin_id=s['id']
             ))
             msg='Đã cập nhật câu gốc thành công (Quyền Quản trị)!'
         else:
-            msg='Đã gửi đề xuất sửa câu gốc kèm phiên âm và nghĩa tiếng Việt để Admin duyệt!'
+            msg='Đã gửi đề xuất sửa câu gốc để Admin duyệt!'
     return {'id':cid,'status':status,'message':msg}
 
 
@@ -813,7 +860,7 @@ async def edit_sentence_correction(request:Request):
     cid=text(p,'id',True,40)
     tai=text(p,'suggested_tai_text',True,5000)
     roman=text(p,'suggested_romanization',True,5000)
-    meaning=text(p,'suggested_meaning',True,5000)
+    meaning=text(p,'suggested_meaning',False,5000) or ''
     status=p.get('status','approved')
     if status not in ('approved','rejected','pending'): status='approved'
     with database() as db:
@@ -821,9 +868,9 @@ async def edit_sentence_correction(request:Request):
         if not old: raise HTTPException(404,'Không tìm thấy bản ghi sửa câu.')
         db.execute('UPDATE sentence_corrections SET suggested_tai_text=?, suggested_romanization=?, suggested_meaning=?, status=? WHERE id=?',
                    (tai,roman,meaning,status,cid))
-        if status=='approved':
+        if status=='approved' and meaning and meaning.strip():
             sid=old['sentence_id']
-            insert(db,'translations',dict(sentence_id=sid,vietnamese_text=meaning,origin='correction',contributor_id=old.get('contributor_id'),status='approved'))
+            insert(db,'translations',dict(sentence_id=sid,vietnamese_text=meaning.strip(),origin='correction',contributor_id=old.get('contributor_id'),status='approved'))
         insert(db,'moderation_events',dict(entity_table='sentence_corrections',entity_id=cid,previous_status=old['status'],new_status=status,admin_id=s['id']))
     return {'ok':True,'message':'Đã cập nhật và duyệt câu sửa thành công!'}
 
