@@ -4,7 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Tai Việt — Kho ngôn ngữ cộng đồng</title>
-  <meta name="description" content="Đóng góp chữ Tai, câu, bản dịch và cùng kiểm tra dữ liệu ngôn ngữ cho nghiên cứu.">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon.png">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="stylesheet" href="/static/style.css">
   <script type="module" src="/static/app.js"></script>
 </head>
@@ -105,6 +107,41 @@
     <div class="eyebrow">KẾT NỐI HAI NGÔN NGỮ</div>
     <h1>Dịch một câu</h1>
     <p class="intro">Mỗi bản dịch là một đóng góp riêng. Bạn có thể diễn đạt theo cách tự nhiên nhất.</p>
+    <div class="filter-bar" id="trans-filter-bar">
+      <div class="filter-group">
+        <label for="trans-filter-status">Trạng thái:</label>
+        <select id="trans-filter-status">
+          <option value="approved">Đã duyệt</option>
+          <option value="pending">Chưa duyệt</option>
+          <option value="all">Tất cả</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="trans-filter-source">Nguồn:</label>
+        <select id="trans-filter-source">
+          <option value="all">Tất cả nguồn</option>
+          <option value="community">Được đóng góp</option>
+          <option value="dictionary">Từ điển / Gốc</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="trans-filter-meaning">Bản dịch:</label>
+        <select id="trans-filter-meaning">
+          <option value="all">Tất cả</option>
+          <option value="no_meaning">Chưa có nghĩa</option>
+          <option value="has_meaning">Đã có nghĩa</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="trans-filter-roman">Phiên âm:</label>
+        <select id="trans-filter-roman">
+          <option value="all">Tất cả</option>
+          <option value="no_roman">Chưa có phiên âm</option>
+          <option value="has_roman">Đã có phiên âm</option>
+        </select>
+      </div>
+      <button type="button" id="trans-filter-apply" class="btn-filter">Lọc câu</button>
+    </div>
     <div id="translation-prompt" class="prompt"></div>
     <button type="button" id="next-sentence" class="secondary">Câu khác</button>
     <form id="translation-form">
@@ -132,6 +169,33 @@
   <section id="review" class="panel" hidden>
     <div class="eyebrow">CÙNG KIỂM TRA CHẤT LƯỢNG</div>
     <h1>Bản dịch này đã đúng chưa?</h1>
+    <div class="filter-bar" id="review-filter-bar">
+      <div class="filter-group">
+        <label for="review-filter-status">Bản dịch:</label>
+        <select id="review-filter-status">
+          <option value="approved">Đã duyệt</option>
+          <option value="pending">Chờ duyệt</option>
+          <option value="all">Tất cả</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="review-filter-source">Nguồn:</label>
+        <select id="review-filter-source">
+          <option value="all">Tất cả nguồn</option>
+          <option value="community">Được đóng góp</option>
+          <option value="dictionary">Từ điển / Gốc</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="review-filter-roman">Phiên âm câu:</label>
+        <select id="review-filter-roman">
+          <option value="all">Tất cả</option>
+          <option value="no_roman">Chưa có phiên âm</option>
+          <option value="has_roman">Đã có phiên âm</option>
+        </select>
+      </div>
+      <button type="button" id="review-filter-apply" class="btn-filter">Lọc bản dịch</button>
+    </div>
     <div id="review-prompt" class="prompt"></div>
     <button type="button" id="next-review" class="secondary">Bản dịch khác</button>
     <form id="review-form">
@@ -210,6 +274,7 @@
             <option value="sentences">Câu Tai</option>
             <option value="translations">Bản dịch</option>
             <option value="word_contributions">Từ đóng góp</option>
+            <option value="sentence_corrections">Đề xuất sửa câu gốc</option>
             <option value="sentence_submissions">Nguồn gốc câu đóng góp</option>
             <option value="romanization_corrections">Sửa phiên âm</option>
             <option value="translation_validations">Kiểm tra bản dịch</option>
