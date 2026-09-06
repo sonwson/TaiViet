@@ -1,0 +1,27 @@
+{
+  "version": "2.2.0-confirmed-vowel-e",
+  "vowel_additions": {
+    "pos_middle": {"ꪮ": {"name": "mày ò", "ipa": "o", "status": "confirmed", "source": "User correction: phòm = phò + mày ò + mò"}},
+    "pos_wrap": {"ꪹ...ꪸ": {"name": "may kê", "ipa": "ê", "status": "confirmed", "source": "User confirmation: kếp/cếp = ꪹꪀꪸꪚ"}}
+  },
+  "zero_initial": {"group": "o", "status": "confirmed", "source": "User correction: ỉn borrows consonant o + mày cì + nõ"},
+  "source": "promt3.md sections 1-2; promt4.md confirmed rime examples",
+  "tone_rules": {
+    "low": {"none": "huyền", "꪿": "sắc", "꫁": "hỏi"},
+    "high": {"none": "ngã", "꪿": "ngang", "꫁": "nặng"}
+  },
+  "special_rime_rules": {
+    "medial_oa_i": {
+      "status": "confirmed", "priority": 200,
+      "tai_tail": "ꪫꪱꪥ", "romanization_rime": "oai",
+      "medial": "ꪫ", "vowel": "oa", "final": "i", "final_character": "ꪥ",
+      "tone_vowel_index": 1, "source": "promt4.md example 1"
+    },
+    "post_vowel_ua_m": {
+      "status": "confirmed", "priority": 200,
+      "tai_tail": "ꪱꪫꪣ", "romanization_rime": "uam",
+      "medial": "ꪫ", "vowel": "ua", "final": "m", "final_character": "ꪣ",
+      "tone_vowel_index": 0, "source": "promt4.md example 2"
+    }
+  }
+}

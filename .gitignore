@@ -1,0 +1,64 @@
+# ===================================================
+# Môi trường ảo, thư viện & cache Python
+# ===================================================
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+
+# ===================================================
+# Bí mật & Cấu hình môi trường (Không bao giờ đẩy lên Git)
+# ===================================================
+.env
+.env.*
+!.env.example
+runtime/
+*.log
+
+# ===================================================
+# Node modules & frontend test tooling
+# ===================================================
+node_modules/
+package-lock.json
+package.json
+
+# ===================================================
+# Kiểm thử, đánh giá & file nháp (Không cần cho deploy)
+# ===================================================
+tests/
+test_*.py
+*_test.py
+scripts/test_*
+scripts/evaluate_*
+scratch/
+
+# ===================================================
+# Báo cáo, tài liệu tạm, prompt nháp & sao lưu
+# ===================================================
+backups/
+reports/
+Promt*.md
+promt*.md
+REPORT*.md
+*.docx
+requirements-training.txt
+
+# ===================================================
+# Dữ liệu thô ngoại tuyến (Raw data không dùng khi chạy app)
+# ===================================================
+*.xlsx
+data/TaiViet_dataframe.xlsx
+data/prepare_data.py
+
+# ===================================================
+# IDE & OS files
+# ===================================================
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini

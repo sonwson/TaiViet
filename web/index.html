@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Tai Việt — Kho ngôn ngữ cộng đồng</title>
+  <meta name="description" content="Đóng góp chữ Tai, câu, bản dịch và cùng kiểm tra dữ liệu ngôn ngữ cho nghiên cứu.">
+  <link rel="stylesheet" href="/static/style.css">
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+
+<!-- ===== Header ===== -->
+<header>
+  <a class="brand" href="#words">
+    <span class="brand-mark" aria-hidden="true">ꪼꪕ</span>
+    <span>Tai Việt<small>Kho ngôn ngữ cộng đồng</small></span>
+  </a>
+  <button class="hamburger" aria-label="Menu" aria-expanded="false">☰</button>
+</header>
+
+<!-- ===== Top Navigation ===== -->
+<nav id="main-nav" aria-label="Chức năng">
+  <button data-tab="words" aria-selected="true">Đóng góp từ</button>
+  <button data-tab="sentences">Đóng góp câu</button>
+  <button data-tab="translate">Dịch</button>
+  <button data-tab="review">Kiểm tra</button>
+  <button data-tab="dictionary">Tra cứu</button>
+  <button data-tab="about">Giới thiệu</button>
+  <button data-tab="admin">Quản trị</button>
+</nav>
+
+<!-- ===== Main Content ===== -->
+<main>
+  <div id="notice" role="status" aria-live="polite"></div>
+
+  <!-- Đóng góp từ -->
+  <section id="words" class="panel">
+    <div class="eyebrow">CÙNG LƯU GIỮ TIẾNG TAI</div>
+    <h1>Góp một từ, thêm một nghĩa.</h1>
+    <p class="intro">Nhập phiên âm hoặc chữ Tai. Hệ thống gợi ý cách còn lại; bạn có thể sửa trước khi gửi.</p>
+    <form id="word-form">
+      <div class="two">
+        <label>Phiên âm
+          <input id="word-roman" name="romanization_original" maxlength="120" placeholder="Ví dụ: khảu" autocomplete="off">
+        </label>
+        <label>Chữ Tai
+          <input id="word-tai" class="tai" name="tai_text_original" maxlength="120" placeholder="Nhập chữ Tai" autocomplete="off">
+        </label>
+      </div>
+      <p id="word-status" class="hint" role="status" aria-live="polite"></p>
+      <div id="word-choices"></div>
+      <div id="word-meanings" aria-live="polite"></div>
+      <label>Nghĩa bạn muốn đóng góp <span aria-label="bắt buộc">*</span>
+        <textarea name="vietnamese_meaning" required maxlength="5000" rows="3" placeholder="Nhập nghĩa hoặc bổ sung cách giải thích của bạn"></textarea>
+      </label>
+      <button type="submit">Gửi đóng góp <span aria-hidden="true">↗</span></button>
+    </form>
+  </section>
+
+  <!-- Đóng góp câu -->
+  <section id="sentences" class="panel" hidden>
+    <div class="eyebrow">TỪ CÁCH NÓI HẰNG NGÀY</div>
+    <h1>Đóng góp một câu Tai</h1>
+    <p class="intro">Nhập câu chữ Tai hoặc phiên âm trước. Bạn có thể chỉnh gợi ý trước khi gửi.</p>
+    <form id="sentence-form">
+      <div class="two">
+        <label>Câu chữ Tai
+          <textarea id="sentence-tai" class="tai" name="tai_text_original" rows="4" maxlength="5000"></textarea>
+        </label>
+        <label>Phiên âm
+          <textarea id="sentence-roman" name="romanization_original" rows="4" maxlength="5000"></textarea>
+        </label>
+      </div>
+      <p id="sentence-status" class="hint" role="status" aria-live="polite"></p>
+      <div id="sentence-choices"></div>
+      <label>Nghĩa tiếng Việt của câu (không bắt buộc)
+        <textarea name="vietnamese_meaning" rows="3" maxlength="5000" placeholder="Nhập nghĩa hoặc bản dịch tiếng Việt của câu (nếu có)"></textarea>
+      </label>
+      <details>
+        <summary>Thêm nguồn hoặc khu vực (không bắt buộc)</summary>
+        <div class="two">
+          <label>Nguồn
+            <select name="source_type">
+              <option value="self">Tự viết</option>
+              <option value="oral">Hội thoại / lời nói</option>
+              <option value="book">Sách / tài liệu</option>
+              <option value="other">Khác</option>
+            </select>
+          </label>
+          <label>Khu vực (không bắt buộc)
+            <input name="region_original" maxlength="100" placeholder="Ví dụ: Sơn La">
+          </label>
+        </div>
+        <label>Tên nguồn / tài liệu (không bắt buộc)
+          <input name="source_reference" maxlength="300">
+        </label>
+      </details>
+      <button type="submit">Gửi câu <span aria-hidden="true">↗</span></button>
+    </form>
+  </section>
+
+  <!-- Dịch -->
+  <section id="translate" class="panel" hidden>
+    <div class="eyebrow">KẾT NỐI HAI NGÔN NGỮ</div>
+    <h1>Dịch một câu</h1>
+    <p class="intro">Mỗi bản dịch là một đóng góp riêng. Bạn có thể diễn đạt theo cách tự nhiên nhất.</p>
+    <div id="translation-prompt" class="prompt"></div>
+    <button type="button" id="next-sentence" class="secondary">Câu khác</button>
+    <form id="translation-form">
+      <label>Bản dịch của bạn <span aria-label="bắt buộc">*</span>
+        <textarea name="vietnamese_text" required maxlength="5000" rows="4"></textarea>
+      </label>
+      <button type="submit">Gửi bản dịch <span aria-hidden="true">↗</span></button>
+    </form>
+    <details>
+      <summary>Đánh giá cách nói của câu Tai</summary>
+      <form id="naturalness-form">
+        <label>Câu này có tự nhiên không?
+          <select name="naturalness">
+            <option value="natural">Tự nhiên</option>
+            <option value="problematic">Có vấn đề</option>
+            <option value="unsure">Không chắc</option>
+          </select>
+        </label>
+        <button type="submit">Gửi đánh giá</button>
+      </form>
+    </details>
+  </section>
+
+  <!-- Kiểm tra -->
+  <section id="review" class="panel" hidden>
+    <div class="eyebrow">CÙNG KIỂM TRA CHẤT LƯỢNG</div>
+    <h1>Bản dịch này đã đúng chưa?</h1>
+    <div id="review-prompt" class="prompt"></div>
+    <button type="button" id="next-review" class="secondary">Bản dịch khác</button>
+    <form id="review-form">
+      <label>Đánh giá
+        <select name="validation_status" id="validation-status">
+          <option value="correct">Đúng</option>
+          <option value="needs_correction">Cần sửa</option>
+          <option value="incorrect">Sai</option>
+        </select>
+      </label>
+      <label id="correction-label" hidden>Bản dịch đề xuất <span aria-label="bắt buộc">*</span>
+        <textarea name="suggested_translation" maxlength="5000" rows="3"></textarea>
+      </label>
+      <button type="submit">Gửi kiểm tra <span aria-hidden="true">↗</span></button>
+    </form>
+  </section>
+
+  <!-- Tra cứu -->
+  <section id="dictionary" class="panel" hidden>
+    <h1>Tra cứu từ điển</h1>
+    <form id="search-form" class="search">
+      <label>Tìm chữ Tai, phiên âm hoặc nghĩa
+        <input name="q" maxlength="120" placeholder="Tìm một từ…">
+      </label>
+      <button type="submit">Tìm</button>
+    </form>
+    <div id="dictionary-results"></div>
+    <button id="more-dictionary" class="secondary">Trang tiếp</button>
+  </section>
+
+  <!-- Giới thiệu -->
+  <section id="about" class="panel prose" hidden>
+    <div class="eyebrow">TAI.VIET.TRANS_PROJECT</div>
+    <h1>Một kho dữ liệu, nhiều tiếng nói.</h1>
+    <p>Dự án tập hợp chữ Tai, phiên âm, nghĩa và câu nói để xây dựng tài nguyên ngôn ngữ và phục vụ nghiên cứu NLP.</p>
+    <h2>Bạn có thể góp gì?</h2>
+    <p>Một từ quen thuộc, một câu trong hội thoại, một bản dịch hoặc một lượt kiểm tra đều giúp kho dữ liệu phong phú hơn. Người đóng góp không cần đăng ký tài khoản.</p>
+    <h2>Nguyên văn luôn được giữ lại</h2>
+    <p>Gợi ý của hệ thống có thể chưa đúng. Dữ liệu bạn nhập và gợi ý được lưu riêng; đóng góp mới sẽ chờ quản trị viên duyệt.</p>
+    <h2>Quyền sử dụng dữ liệu</h2>
+    <p>Kho dữ liệu phục vụ nghiên cứu và xây dựng tài nguyên ngôn ngữ. Chỉ đóng góp nội dung bạn có quyền chia sẻ.</p>
+  </section>
+
+  <!-- Quản trị -->
+  <section id="admin" class="panel" hidden>
+    <h1>Quản trị dữ liệu</h1>
+    <div id="admin-login-card" class="login-card">
+      <div class="login-header">
+        <span class="brand-mark login-mark" aria-hidden="true">ꪼꪕ</span>
+        <h2>Đăng nhập Quản trị viên</h2>
+        <p class="intro">Đăng nhập để duyệt đóng góp cộng đồng và quản lý kho ngữ liệu Tai Việt.</p>
+      </div>
+      <form id="admin-login">
+        <label>Tên đăng nhập
+          <input type="text" name="username" placeholder="Nhập tên đăng nhập" autocomplete="username" required autofocus>
+        </label>
+        <label>Mật khẩu
+          <input type="password" name="password" placeholder="Nhập mật khẩu" autocomplete="current-password" required>
+        </label>
+        <button type="submit" class="btn-login">Đăng nhập hệ thống ➔</button>
+        
+      </form>
+    </div>
+    <div id="admin-workspace" hidden>
+      <div class="admin-top-bar">
+        <div class="admin-user-info">
+          <span class="admin-badge">Quản trị viên</span>
+          <span id="admin-greeting">Đang hoạt động</span>
+        </div>
+        <button id="admin-logout" class="btn-logout" type="button">Đăng xuất ⎋</button>
+      </div>
+      <div id="admin-stats-bar" class="admin-stats-grid"></div>
+      <div class="toolbar">
+        <label>Loại dữ liệu
+          <select id="admin-table">
+            <option value="sentences">Câu Tai</option>
+            <option value="translations">Bản dịch</option>
+            <option value="word_contributions">Từ đóng góp</option>
+            <option value="sentence_submissions">Nguồn gốc câu đóng góp</option>
+            <option value="romanization_corrections">Sửa phiên âm</option>
+            <option value="translation_validations">Kiểm tra bản dịch</option>
+            <option value="sentence_reviews">Đánh giá câu</option>
+            <option value="moderation_events">Lịch sử duyệt</option>
+          </select>
+        </label>
+        <label>Trạng thái
+          <select id="admin-status">
+            <option value="pending">Chờ duyệt</option>
+            <option value="approved">Đã duyệt</option>
+            <option value="rejected">Từ chối</option>
+            <option value="all">Tất cả</option>
+          </select>
+        </label>
+        <label>Tìm nội dung
+          <input id="admin-query" maxlength="120" placeholder="Lọc theo nội dung...">
+        </label>
+        <button id="admin-load" class="secondary">Lọc</button>
+      </div>
+      <div class="export-panel">
+        <div class="export-header">
+          <strong>Xuất dữ liệu tùy chọn:</strong>
+        </div>
+        <div class="export-controls">
+          <label>Bảng xuất
+            <select id="export-table">
+              <option value="all">Tất cả (Corpus đầy đủ)</option>
+              <option value="sentences">Câu Tai (sentences)</option>
+              <option value="word_contributions">Từ đóng góp (word_contributions)</option>
+              <option value="translations">Bản dịch (translations)</option>
+              <option value="lexemes">Từ vựng từ điển (lexemes)</option>
+            </select>
+          </label>
+          <label>Trạng thái
+            <select id="export-status">
+              <option value="approved">Chỉ đã duyệt (approved)</option>
+              <option value="pending">Chờ duyệt (pending)</option>
+              <option value="all">Tất cả (all)</option>
+            </select>
+          </label>
+          <button id="btn-export-json" class="secondary" type="button">⬇ Tải JSON</button>
+          <button id="btn-export-csv" class="secondary" type="button">⬇ Tải CSV</button>
+        </div>
+      </div>
+      <div id="admin-results"></div>
+      <button id="admin-more" class="secondary">Trang tiếp</button>
+    </div>
+  </section>
+</main>
+
+<!-- ===== Bottom Navigation (mobile) ===== -->
+<nav class="bottom-nav" aria-label="Chức năng chính">
+  <button data-tab="words" aria-selected="true">
+    <span class="nav-icon" aria-hidden="true">✎</span>
+    Đóng góp
+  </button>
+  <button data-tab="translate">
+    <span class="nav-icon" aria-hidden="true">⇄</span>
+    Dịch
+  </button>
+  <button data-tab="review">
+    <span class="nav-icon" aria-hidden="true">✓</span>
+    Kiểm tra
+  </button>
+  <button data-tab="dictionary">
+    <span class="nav-icon" aria-hidden="true">⌕</span>
+    Tra cứu
+  </button>
+</nav>
+
+<!-- ===== Footer ===== -->
+<footer>
+  <span>Tai Việt · Dữ liệu có nguồn gốc, đóng góp có kiểm duyệt.</span>
+  <span>Nguyên văn được bảo toàn.</span>
+</footer>
+
+</body>
+</html>
