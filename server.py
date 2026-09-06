@@ -490,7 +490,13 @@ def sentences(request:Request,q:str='',offset:int=0,limit:int=20):
     if len(q)>120 or offset<0: raise HTTPException(422,'Bộ lọc không hợp lệ.')
     limit=min(max(1,limit),100)
     with database() as db:
-        rows=db.execute('SELECT id,tai_text_original,romanization,source_type,region_original FROM sentences WHERE status=? AND tai_text_original LIKE ? ORDER BY id LIMIT ? OFFSET ?',('approved','%'+q+'%',limit,offset)).fetchall()
+        rows=db.execute('''SELECT id,tai_text_original,romanization,source_type,region_original FROM sentences
+            WHERE status=? AND tai_text_original LIKE ?
+            ORDER BY 
+                CASE WHEN romanization IS NULL OR trim(romanization)='' THEN 0 ELSE 1 END ASC,
+                (SELECT count(*) FROM translations tr WHERE tr.sentence_id=sentences.id AND tr.status='approved') ASC,
+                id ASC
+            LIMIT ? OFFSET ?''',('approved','%'+q+'%',limit,offset)).fetchall()
         return {'items':batch_sentence_details(db,rows)}
 
 
@@ -515,7 +521,11 @@ def review_queue(request:Request,offset:int=0,limit:int=20):
             JOIN sentences s ON s.id=t.sentence_id WHERE t.status='approved' AND s.status='approved'
             AND (t.contributor_id IS NULL OR t.contributor_id<>?) AND NOT EXISTS
             (SELECT 1 FROM translation_validations v WHERE v.translation_id=t.id AND v.contributor_id=?)
-            ORDER BY t.id LIMIT ? OFFSET ?''',(s['id'],s['id'],limit,offset)).fetchall()
+            ORDER BY 
+                CASE WHEN s.romanization IS NULL OR trim(s.romanization)='' THEN 0 ELSE 1 END ASC,
+                (SELECT count(*) FROM translation_validations v2 WHERE v2.translation_id=t.id) ASC,
+                t.id ASC
+            LIMIT ? OFFSET ?''',(s['id'],s['id'],limit,offset)).fetchall()
         return {'items':batch_sentence_details(db,rows)}
 
 
