@@ -5,6 +5,7 @@ if hasattr(sys.stderr,'reconfigure'): sys.stderr.reconfigure(encoding='utf-8',er
 from contextlib import contextmanager
 from collections import defaultdict,deque
 import csv
+import html
 import io
 import json
 import os
@@ -40,6 +41,7 @@ ADMIN_HASH=hash_pass(ADMIN_PASSWORD)
 engine=Engine()
 app=FastAPI(title='Tai Việt — cộng đồng dữ liệu',docs_url='/api/docs')
 sessions={}; limits=defaultdict(deque)
+login_failures=defaultdict(list); login_lockouts={}
 CONSENT='not_collected-local-v2'
 
 DB_BACKEND=os.environ.get('DB_BACKEND','sqlite').lower().strip()
@@ -142,6 +144,37 @@ else:
         print(f"[+] Đã kết nối Supabase Cloud. Số bản ghi word_senses hiện có: {initial_count:,}")
 
 
+def get_client_ip(request:Request)->str:
+    xff=request.headers.get('x-forwarded-for')
+    if xff: return xff.split(',')[0].strip()
+    return request.client.host if request.client else '127.0.0.1'
+
+
+def check_login_rate(ip:str):
+    now=time.time()
+    if ip in login_lockouts:
+        locked_until=login_lockouts[ip]
+        if now<locked_until:
+            rem=int(locked_until-now)
+            raise HTTPException(429,f'Quá nhiều lần đăng nhập thất bại. IP tạm thời bị khóa trong {rem} giây.')
+        del login_lockouts[ip]
+        login_failures[ip].clear()
+
+
+def record_login_failure(ip:str):
+    now=time.time()
+    login_failures[ip]=[t for t in login_failures[ip] if now-t<900]
+    login_failures[ip].append(now)
+    if len(login_failures[ip])>=5:
+        login_lockouts[ip]=now+900
+        raise HTTPException(429,'Bạn đã nhập sai mật khẩu 5 lần liên tiếp. IP đã bị tạm khóa 15 phút.')
+
+
+def record_login_success(ip:str):
+    login_failures.pop(ip,None)
+    login_lockouts.pop(ip,None)
+
+
 @app.middleware('http')
 async def local_guard(request:Request,call_next):
     if request.method not in ('GET','HEAD','OPTIONS'):
@@ -161,8 +194,12 @@ async def local_guard(request:Request,call_next):
         if len(body)>65536: return JSONResponse({'detail':'Input too large'},status_code=413)
     response=await call_next(request)
     response.headers['X-Content-Type-Options']='nosniff'
-    response.headers['Referrer-Policy']='same-origin'
-    response.headers['Cache-Control']='no-store'
+    response.headers['X-Frame-Options']='DENY'
+    response.headers['Referrer-Policy']='strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy']='geolocation=(), camera=(), microphone=()'
+    if request.url.scheme=='https' or request.headers.get('x-forwarded-proto')=='https':
+        response.headers['Strict-Transport-Security']='max-age=31536000; includeSubDomains'
+    response.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Content-Security-Policy']="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     return response
 
@@ -198,7 +235,7 @@ def text(p,key,required=False,maximum=5000):
     if value is None and not required: return None
     if not isinstance(value,str) or len(value)>maximum or '\x00' in value or (required and not value.strip()):
         raise HTTPException(422,f'Trường {key} không hợp lệ (tối đa {maximum} ký tự).')
-    return value
+    return html.escape(value.strip(), quote=True)
 
 
 def generation_inputs(p,maximum):
@@ -208,7 +245,11 @@ def generation_inputs(p,maximum):
 
 
 def submission(request,p):
-    s=session(request); throttle('submit:'+s['id']); throttle('ip:'+request.client.host,60)
+    if p.get('hp_check') or p.get('website'):
+        raise HTTPException(400,'Yêu cầu không hợp lệ.')
+    s=session(request); ip=get_client_ip(request)
+    throttle('submit:'+s['id'], count=15, seconds=60)
+    throttle('ip:'+ip, count=25, seconds=60)
     return s
 
 
@@ -231,7 +272,7 @@ def get_session(request:Request):
     for key in [k for k,v in sessions.items() if v['expires']<now]: sessions.pop(key,None)
     token=request.cookies.get('tai_session'); s=sessions.get(token)
     if not s:
-        throttle('sessions:'+request.client.host,30)
+        throttle('sessions:'+get_client_ip(request),30)
         token=secrets.token_urlsafe(32); s={'id':str(uuid.uuid4()),'admin':False,'expires':now+86400}; sessions[token]=s
     response=JSONResponse({'contributor_id':s['id'],'admin':s['admin'],
                            'consent_version':CONSENT,'mode':DB_BACKEND})
@@ -249,7 +290,9 @@ def parse_json(val):
 
 @app.post('/api/admin/login')
 async def login(request:Request):
-    throttle('login:'+request.client.host,5)
+    ip=get_client_ip(request)
+    check_login_rate(ip)
+    throttle('login:'+ip,5,60)
     p=await payload(request)
     username=p.get('username')
     password=p.get('password')
@@ -261,7 +304,10 @@ async def login(request:Request):
     elif token:
         if secrets.compare_digest(token.strip(),ADMIN_TOKEN):
             authenticated=True
-    if not authenticated: raise HTTPException(401,'Tên đăng nhập hoặc mật khẩu không chính xác.')
+    if not authenticated:
+        record_login_failure(ip)
+        raise HTTPException(401,'Tên đăng nhập hoặc mật khẩu không chính xác.')
+    record_login_success(ip)
     s=session(request); s['admin']=True
     return {'ok':True,'username':ADMIN_USERNAME}
 
@@ -274,7 +320,7 @@ def logout(request:Request):
 
 @app.post('/api/engine')
 async def convert(request:Request):
-    session(request); throttle('engine:'+request.client.host,120)
+    session(request); throttle('engine:'+get_client_ip(request),120,60)
     p=await payload(request); value=text(p,'text',True,5000 if p.get('sentence') else 120)
     if p.get('direction')=='tai':
         result=engine.tai_to_romanization(value,dictionary=True)
