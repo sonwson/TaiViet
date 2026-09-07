@@ -100,6 +100,7 @@ class PgCursorWrapper:
         if 'INSERT OR IGNORE INTO' in sql_conv.upper():
             sql_conv=re.sub(r'INSERT\s+OR\s+IGNORE\s+INTO','INSERT INTO',sql_conv,flags=re.IGNORECASE)
             sql_conv=sql_conv.rstrip().rstrip(';')+' ON CONFLICT DO NOTHING'
+        sql_conv=re.sub(r'\bLIKE\b','ILIKE',sql_conv)
         return sql_conv
 
     def execute(self,sql,params=None):
@@ -151,6 +152,7 @@ def database():
             pg_pool.putconn(conn)
     else:
         db=sqlite3.connect(DB_PATH); db.row_factory=sqlite3.Row; db.execute('PRAGMA foreign_keys=ON')
+        db.create_function('LOWER', 1, lambda s: s.lower() if s is not None else None)
         try:
             with db: yield db
         finally: db.close()
@@ -594,7 +596,9 @@ def sentences(request:Request,q:str='',offset:int=0,limit:int=20,status:str='app
     if status!='all':
         clauses.append('sentences.status=?'); params.append(status)
     if q:
-        clauses.append('sentences.tai_text_original LIKE ?'); params.append('%'+q+'%')
+        q_pat='%'+q.strip()+'%'
+        clauses.append('(sentences.tai_text_original LIKE ? OR LOWER(sentences.romanization) LIKE LOWER(?))')
+        params.extend([q_pat,q_pat])
     if source=='community':
         clauses.append("sentences.source_type IN ('community','self','oral','book','other')")
     elif source=='dictionary':
@@ -695,14 +699,16 @@ async def review_sentence(request:Request):
 @app.get('/api/dictionary')
 def dictionary(q:str='',offset:int=0):
     if len(q)>120 or offset<0: raise HTTPException(422,'Bộ lọc không hợp lệ.')
+    q_clean=q.strip()
     with database() as db:
-        keys=engine.canonical_keys(q)
+        keys=engine.canonical_keys(q_clean) if q_clean else []
         placeholders=','.join('?' for _ in keys) or 'NULL'
+        pattern='%'+q_clean+'%'
         lex_rows=db.execute('''SELECT l.id,l.tai_text_original,l.romanization,w.id sense_id,w.vietnamese_meaning,w.part_of_speech,'word' as kind
         FROM lexemes l JOIN word_senses w ON w.lexeme_id=l.id WHERE l.status='approved' AND w.status='approved'
-        AND (l.tai_text_original LIKE ? OR l.romanization LIKE ? OR w.vietnamese_meaning LIKE ? OR EXISTS
+        AND (l.tai_text_original LIKE ? OR LOWER(l.romanization) LIKE LOWER(?) OR LOWER(w.vietnamese_meaning) LIKE LOWER(?) OR EXISTS
         (SELECT 1 FROM lexeme_search_keys sk WHERE sk.lexeme_id=l.id AND sk.rule_version=? AND sk.canonical_key IN ('''+placeholders+'''))) ORDER BY l.id,w.id LIMIT 25 OFFSET ?''',
-        ('%'+q+'%',)*3+(engine.version,*keys,offset)).fetchall()
+        (pattern,pattern,pattern,engine.version,*keys,offset)).fetchall()
 
         contrib_rows=[]
         if offset==0 or len(lex_rows)<25:
@@ -713,19 +719,19 @@ def dictionary(q:str='',offset:int=0):
             FROM word_contributions wc
             WHERE wc.status='approved'
             AND (coalesce(wc.tai_text_final, wc.tai_text_original) LIKE ?
-                 OR coalesce(wc.romanization_final, wc.romanization_original) LIKE ?
-                 OR wc.vietnamese_meaning LIKE ?)
+                 OR LOWER(coalesce(wc.romanization_final, wc.romanization_original)) LIKE LOWER(?)
+                 OR LOWER(wc.vietnamese_meaning) LIKE LOWER(?))
             ORDER BY wc.created_at DESC LIMIT 10 OFFSET ?''',
-            ('%'+q+'%', '%'+q+'%', '%'+q+'%', offset)).fetchall()
+            (pattern,pattern,pattern,offset)).fetchall()
 
         sent_rows=db.execute('''SELECT s.id, s.tai_text_original, s.romanization,
             t.id as sense_id, t.vietnamese_text as vietnamese_meaning, 'Câu đã duyệt' as part_of_speech, 'sentence' as kind
         FROM sentences s
         JOIN translations t ON t.sentence_id = s.id
         WHERE s.status='approved' AND t.status='approved'
-        AND (s.tai_text_original LIKE ? OR s.romanization LIKE ? OR t.vietnamese_text LIKE ?)
+        AND (s.tai_text_original LIKE ? OR LOWER(s.romanization) LIKE LOWER(?) OR LOWER(t.vietnamese_text) LIKE LOWER(?))
         ORDER BY s.id LIMIT 20 OFFSET ?''',
-        ('%'+q+'%', '%'+q+'%', '%'+q+'%', offset)).fetchall()
+        (pattern,pattern,pattern,offset)).fetchall()
 
         processed_sents=[]
         for sr in sent_rows:
@@ -753,18 +759,34 @@ def dictionary(q:str='',offset:int=0):
 @app.get('/api/words/meanings')
 def word_meanings(tai:str='',roman:str=''):
     if len(tai)>120 or len(roman)>120:raise HTTPException(422,'Từ quá dài.')
-    keys=engine.canonical_keys(roman) if roman.strip() else []
+    tai=tai.strip(); roman=roman.strip()
+    keys=engine.canonical_keys(roman) if roman else []
     placeholders=','.join('?' for _ in keys) or 'NULL'
     with database() as db:
         rows=db.execute('''SELECT DISTINCT l.tai_text_original,l.romanization,w.vietnamese_meaning
           FROM lexemes l JOIN word_senses w ON w.lexeme_id=l.id
           WHERE l.status='approved' AND w.status='approved' AND
           ((?<>'' AND l.tai_text_original=?) OR (?='' AND ?<>'' AND
-          (l.romanization=? OR EXISTS (SELECT 1 FROM lexeme_search_keys sk
+          (LOWER(l.romanization)=LOWER(?) OR EXISTS (SELECT 1 FROM lexeme_search_keys sk
            WHERE sk.lexeme_id=l.id AND sk.rule_version=? AND sk.canonical_key IN ('''+placeholders+''')))))
           ORDER BY l.tai_text_original,w.vietnamese_meaning''',
           (tai,tai,tai,roman,roman,engine.version,*keys)).fetchall()
-    return {'items':[dict(r) for r in rows]}
+        contribs=db.execute('''SELECT DISTINCT coalesce(tai_text_final,tai_text_original) as tai_text_original,
+          coalesce(romanization_final,romanization_original) as romanization,vietnamese_meaning
+          FROM word_contributions
+          WHERE status='approved' AND
+          ((?<>'' AND (tai_text_final=? OR tai_text_original=?)) OR
+           (?='' AND ?<>'' AND LOWER(coalesce(romanization_final,romanization_original))=LOWER(?)))
+          ORDER BY vietnamese_meaning''',
+          (tai,tai,tai,tai,roman,roman)).fetchall()
+    all_items=[dict(r) for r in rows]+[dict(r) for r in contribs]
+    seen=set(); unique_items=[]
+    for item in all_items:
+        m=item.get('vietnamese_meaning','').strip().lower()
+        if m and m not in seen:
+            seen.add(m)
+            unique_items.append(item)
+    return {'items':unique_items}
 
 
 MODERATED={'sentences','translations','word_contributions','annotations','lexemes','word_senses','romanization_corrections','sentence_submissions','sentence_corrections'}
@@ -777,7 +799,19 @@ def admin_records(request:Request,table:str='sentences',status:str='pending',q:s
         clauses=[]; params=[]
         if status!='all' and table in MODERATED: clauses.append('status=?'); params.append(status)
         fields={'sentences':'tai_text_original','translations':'vietnamese_text','word_contributions':'vietnamese_meaning','lexemes':'tai_text_original','word_senses':'vietnamese_meaning','sentence_submissions':'romanization_final','romanization_corrections':'suggested_romanization','sentence_corrections':'suggested_tai_text'}
-        if q and table in fields: clauses.append(fields[table]+' LIKE ?'); params.append('%'+q+'%')
+        if q:
+            q_pat='%'+q.strip()+'%'
+            if table=='word_contributions':
+                clauses.append('(coalesce(tai_text_final,tai_text_original) LIKE ? OR LOWER(coalesce(romanization_final,romanization_original)) LIKE LOWER(?) OR LOWER(vietnamese_meaning) LIKE LOWER(?))')
+                params.extend([q_pat,q_pat,q_pat])
+            elif table=='sentences':
+                clauses.append('(tai_text_original LIKE ? OR LOWER(romanization) LIKE LOWER(?))')
+                params.extend([q_pat,q_pat])
+            elif table=='sentence_corrections':
+                clauses.append('(suggested_tai_text LIKE ? OR LOWER(suggested_romanization) LIKE LOWER(?) OR LOWER(suggested_meaning) LIKE LOWER(?))')
+                params.extend([q_pat,q_pat,q_pat])
+            elif table in fields:
+                clauses.append(f'LOWER({fields[table]}) LIKE LOWER(?)'); params.append(q_pat)
         where=' WHERE '+' AND '.join(clauses) if clauses else ''
         raw_rows=db.execute(f'SELECT * FROM {table}{where} ORDER BY created_at DESC,id LIMIT 30 OFFSET ?',params+[offset]).fetchall()
         items=[]

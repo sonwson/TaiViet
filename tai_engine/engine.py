@@ -151,6 +151,8 @@ class Engine:
                 continue
             self.words[word].append(roman)
             self.romans[roman].append(word)
+            if roman.lower() != roman:
+                self.romans[roman.lower()].append(word)
         self.canonical_dictionary=defaultdict(list)
         for roman,words in self.romans.items():
             for key in self.canonical_keys(roman):
@@ -190,7 +192,7 @@ class Engine:
         return [' '.join(x) for x in itertools.islice(itertools.product(*groups),256)] if groups else []
 
     def dictionary_tai_candidates(self,text):
-        found=list(self.romans.get(text,[]))
+        found=list(self.romans.get(text,[]))+list(self.romans.get(text.lower(),[]))
         for key in self.canonical_keys(text):found.extend(self.canonical_dictionary.get(key,[]))
         return list(dict.fromkeys(found))
 
