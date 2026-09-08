@@ -97,9 +97,6 @@ export function accountUI({api, node, state, refreshSession, openTab}) {
 
     const bottomBtn = $('bottom-account-nav');
     if (bottomBtn) {
-      const iconSpan = bottomBtn.querySelector('.nav-icon');
-      if (iconSpan) iconSpan.textContent = user ? '👤' : '👤';
-      // Update the text node (last child after the icon span)
       const textNode = [...bottomBtn.childNodes].find(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
       if (textNode) textNode.textContent = user ? '\n    Tôi\n  ' : '\n    Tài khoản\n  ';
     }
