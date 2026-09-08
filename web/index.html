@@ -101,7 +101,7 @@
           <input name="source_reference" maxlength="300">
         </label>
       </details>
-      <button type="submit">Gửi câu <span aria-hidden="true">↗</span></button>
+      <button type="submit">Gửi câu</button>
     </form>
   </section>
 
@@ -112,7 +112,7 @@
     <p class="intro">Mỗi bản dịch là một đóng góp riêng. Bạn có thể diễn đạt theo cách tự nhiên nhất.</p>
     <div class="filter-bar" id="trans-filter-bar">
       <div class="filter-group">
-        <label for="trans-filter-status">Trạng thái câu:</label>
+        <label for="trans-filter-status">Trạng thái:</label>
         <select id="trans-filter-status">
           <option value="approved">Đã duyệt</option>
           <option value="pending">Chưa duyệt</option>
@@ -128,19 +128,19 @@
         </select>
       </div>
       <div class="filter-group">
-        <label for="trans-filter-meaning">Bản dịch / Nghĩa:</label>
+        <label for="trans-filter-meaning">Bản dịch:</label>
         <select id="trans-filter-meaning">
           <option value="all">Tất cả</option>
-          <option value="has_meaning">Có nghĩa</option>
           <option value="no_meaning">Chưa có nghĩa</option>
+          <option value="has_meaning">Đã có nghĩa</option>
         </select>
       </div>
       <div class="filter-group">
         <label for="trans-filter-roman">Phiên âm:</label>
         <select id="trans-filter-roman">
           <option value="all">Tất cả</option>
-          <option value="has_roman">Đã có phiên âm</option>
           <option value="no_roman">Chưa có phiên âm</option>
+          <option value="has_roman">Đã có phiên âm</option>
         </select>
       </div>
       <button type="button" id="trans-filter-apply" class="btn-filter">Lọc câu</button>
@@ -151,7 +151,7 @@
       <label>Bản dịch của bạn <span aria-label="bắt buộc">*</span>
         <textarea name="vietnamese_text" required maxlength="5000" rows="4"></textarea>
       </label>
-      <button type="submit">Gửi bản dịch <span aria-hidden="true">↗</span></button>
+      <button type="submit">Gửi bản dịch</button>
     </form>
     <details>
       <summary>Đánh giá cách nói của câu Tai</summary>
@@ -174,11 +174,13 @@
     <h1>Bản dịch này đã đúng chưa?</h1>
     <div class="filter-bar" id="review-filter-bar">
       <div class="filter-group">
-        <label for="review-filter-sentence-status">Câu gốc:</label>
-        <select id="review-filter-sentence-status">
-          <option value="all">Tất cả câu</option>
-          <option value="approved">Đã duyệt</option>
-          <option value="pending">Chưa duyệt</option>
+        <label for="review-filter-validation">Kết quả đã nhận:</label>
+        <select id="review-filter-validation">
+          <option value="all">Tất cả kết quả</option>
+          <option value="unchecked">Chưa có kiểm tra</option>
+          <option value="correct">Đúng (correct)</option>
+          <option value="needs_correction">Cần sửa (needs_correction)</option>
+          <option value="incorrect">Sai (incorrect)</option>
         </select>
       </div>
       <div class="filter-group">
@@ -198,19 +200,11 @@
         </select>
       </div>
       <div class="filter-group">
-        <label for="review-filter-meaning">Bản dịch / Nghĩa:</label>
-        <select id="review-filter-meaning">
-          <option value="has_meaning">Có nghĩa</option>
-          <option value="no_meaning">Chưa có nghĩa</option>
-          <option value="all">Tất cả</option>
-        </select>
-      </div>
-      <div class="filter-group">
-        <label for="review-filter-roman">Phiên âm:</label>
+        <label for="review-filter-roman">Phiên âm câu:</label>
         <select id="review-filter-roman">
           <option value="all">Tất cả</option>
-          <option value="has_roman">Đã có phiên âm</option>
           <option value="no_roman">Chưa có phiên âm</option>
+          <option value="has_roman">Đã có phiên âm</option>
         </select>
       </div>
       <button type="button" id="review-filter-apply" class="btn-filter">Lọc bản dịch</button>
@@ -228,7 +222,7 @@
       <label id="correction-label" hidden>Bản dịch đề xuất <span aria-label="bắt buộc">*</span>
         <textarea name="suggested_translation" maxlength="5000" rows="3"></textarea>
       </label>
-      <button type="submit">Gửi kiểm tra <span aria-hidden="true">↗</span></button>
+      <button type="submit">Gửi kiểm tra</button>
     </form>
   </section>
 
@@ -314,7 +308,7 @@
             <p>Truy cập bảng điều khiển để duyệt từ, câu, bản dịch và quản lý kho ngữ liệu Tai Việt.</p>
           </div>
         </div>
-        <button id="btn-goto-admin" class="btn-admin-cta" type="button">Mở Bảng Quản trị ➔</button>
+        <button id="btn-goto-admin" class="btn-admin-cta" type="button">Mở Bảng Quản trị</button>
       </div>
 
       <!-- Sub Navigation Tabs -->
@@ -329,6 +323,14 @@
 
       <!-- Subpanel 1: Contributions & Stats -->
       <div id="subpanel-contributions" class="account-subpanel">
+        <section class="member-feedback-panel" aria-labelledby="member-feedback-title">
+          <div class="section-title-row">
+            <h3 id="member-feedback-title">Phản hồi từ quản trị viên</h3>
+            <span id="member-feedback-count" class="status-badge" role="status"></span>
+          </div>
+          <div id="member-feedback-results" aria-live="polite"></div>
+          <button id="member-feedback-more" class="secondary" type="button" hidden>Xem thêm phản hồi</button>
+        </section>
         <div class="section-title-row">
           <h3>Thống kê đóng góp của tôi</h3>
           <span id="member-rank-badge" class="member-rank-tag" hidden>Hạng #1</span>
@@ -343,9 +345,10 @@
           <div class="filter-group">
             <label for="member-kind">Loại đóng góp</label>
             <select id="member-kind" name="kind">
-              <option value="all">Từ và câu</option>
+              <option value="all">Tất cả đóng góp</option>
               <option value="word">Từ đóng góp</option>
               <option value="sentence">Câu đóng góp</option>
+              <option value="translation">Bản dịch đóng góp</option>
             </select>
           </div>
           <div class="filter-group">
@@ -477,7 +480,7 @@
         <label>Mật khẩu
           <input type="password" name="password" placeholder="Nhập mật khẩu" autocomplete="current-password" required>
         </label>
-        <button type="submit" class="btn-login">Đăng nhập hệ thống ➔</button>
+        <button type="submit" class="btn-login">Đăng nhập hệ thống</button>
         
       </form>
     </div>
@@ -493,7 +496,8 @@
       <div class="toolbar">
         <label>Loại dữ liệu
           <select id="admin-table">
-            <option value="sentences">Câu Tai</option>
+            <option value="user_accounts">Tài khoản thành viên</option>
+            <option value="sentences" selected>Câu Tai</option>
             <option value="translations">Bản dịch</option>
             <option value="word_contributions">Từ đóng góp</option>
             <option value="sentence_corrections">Đề xuất sửa câu gốc</option>
@@ -517,10 +521,16 @@
         </label>
         <button id="admin-load" class="secondary">Lọc</button>
       </div>
-      <div class="export-panel">
-        <div class="export-header">
-          <strong>Xuất dữ liệu tùy chọn:</strong>
+      <div class="admin-view-bar">
+        <div id="admin-owner-filter" hidden><span id="admin-owner-label"></span> <button id="admin-owner-clear" class="secondary" type="button">Bỏ lọc tài khoản</button></div>
+        <span id="admin-result-count" role="status" aria-live="polite"></span>
+        <div class="admin-view-switch" role="group" aria-label="Kiểu hiển thị">
+          <button id="admin-view-list" type="button" class="secondary" aria-pressed="true">Danh sách</button>
+          <button id="admin-view-cards" type="button" class="secondary" aria-pressed="false">Thẻ chi tiết</button>
         </div>
+      </div>
+      <details class="export-panel">
+        <summary>Xuất dữ liệu</summary>
         <div class="export-controls">
           <label>Bảng xuất
             <select id="export-table">
@@ -538,10 +548,10 @@
               <option value="all">Tất cả (all)</option>
             </select>
           </label>
-          <button id="btn-export-json" class="secondary" type="button">⬇ Tải JSON</button>
-          <button id="btn-export-csv" class="secondary" type="button">⬇ Tải CSV</button>
+          <button id="btn-export-json" class="secondary" type="button">Tải JSON</button>
+          <button id="btn-export-csv" class="secondary" type="button">Tải CSV</button>
         </div>
-      </div>
+      </details>
       <div id="admin-selection" class="admin-selection" hidden>
         <div class="admin-selection-info">
           <label class="admin-row-select"><input id="admin-select-page" type="checkbox"> Chọn cả trang</label>
@@ -550,15 +560,41 @@
         <div class="admin-selection-actions">
           <button id="admin-select-filtered" class="secondary" type="button">Chọn toàn bộ kết quả lọc</button>
           <button id="admin-clear-selection" class="secondary" type="button" disabled>Bỏ chọn</button>
-          <button id="admin-delete-selected" class="btn-danger" type="button" disabled>Xóa đã chọn</button>
+          <button id="admin-delete-sub" class="btn-outline-danger" type="button" disabled hidden>Xóa bản dịch đã chọn</button>
+          <button id="admin-delete-selected" class="btn-danger" type="button" disabled>Xóa vĩnh viễn</button>
         </div>
         <small>Chọn cả trang chỉ áp dụng cho tối đa 30 mục đang hiển thị. Đổi bộ lọc hoặc trang sẽ bỏ lựa chọn.</small>
       </div>
       <div id="admin-results"></div>
+      <button id="admin-prev" class="secondary" type="button" disabled>Trang trước</button>
       <button id="admin-more" class="secondary">Trang tiếp</button>
     </div>
   </section>
 </main>
+<dialog id="admin-editor" class="admin-editor" aria-labelledby="admin-editor-title">
+  <h2 id="admin-editor-title">Chỉnh sửa đóng góp</h2>
+  <form id="admin-editor-form">
+    <div id="admin-editor-fields" class="admin-edit-box"></div>
+    <p id="admin-editor-error" class="error" role="alert"></p>
+    <div class="admin-selection-actions">
+      <button id="admin-editor-cancel" type="button" class="secondary">Hủy</button>
+      <button id="admin-editor-save" type="submit">Lưu thay đổi</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="admin-feedback-dialog" class="admin-delete-dialog" aria-labelledby="admin-feedback-title">
+  <h2 id="admin-feedback-title">Phản hồi người đóng góp</h2>
+  <form id="admin-feedback-form">
+    <p id="admin-feedback-recipient"></p>
+    <label>Nội dung phản hồi<textarea id="admin-feedback-message" rows="4" maxlength="2000" placeholder="Ví dụ: Bản dịch chưa đúng nghĩa ở từ cuối câu…"></textarea></label>
+    <p id="admin-feedback-help" class="hint"></p>
+    <p id="admin-feedback-error" class="error" role="alert"></p>
+    <div class="admin-selection-actions">
+      <button id="admin-feedback-cancel" type="button" class="secondary">Hủy</button>
+      <button id="admin-feedback-send" type="submit">Gửi phản hồi</button>
+    </div>
+  </form>
+</dialog>
 <dialog id="admin-delete-dialog" class="admin-delete-dialog" aria-labelledby="admin-delete-title" aria-describedby="admin-delete-summary admin-delete-warning">
   <h2 id="admin-delete-title">Xác nhận xóa dữ liệu</h2>
   <p id="admin-delete-summary"></p>
@@ -588,7 +624,7 @@
     Tra cứu
   </button>
   <button data-tab="account" id="bottom-account-nav">
-    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="/static/icons.svg#user"></use></svg>
+    <svg class="ui-icon nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#user"></use></svg>
     Tài khoản
   </button>
 </nav>

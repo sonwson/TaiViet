@@ -128,7 +128,7 @@ class Accounts:
 
         with self.s.database() as db:
             if self.s.DB_BACKEND == 'supabase':
-                for table in ('user_accounts', 'account_sessions', 'password_resets'):
+                for table in ('user_accounts', 'account_sessions', 'password_resets', 'account_feedback', 'password_change_logs'):
                     try:
                         db.execute(f'ALTER TABLE {table} ENABLE ROW LEVEL SECURITY')
                         db.execute(f'REVOKE ALL ON {table} FROM PUBLIC, anon, authenticated')
@@ -163,7 +163,13 @@ class Accounts:
                 FROM user_accounts u
                 JOIN account_sessions s ON s.user_id=u.id
                 WHERE s.token_hash=? AND s.expires_at>?''', (digest(token), int(time.time()))).fetchone()
-        return {**dict(row), 'id': str(row['id'])} if row else None
+            if not row: return None
+            user_data = {**dict(row), 'id': str(row['id'])}
+            now = int(time.time())
+            recent = [r[0] for r in db.execute('SELECT changed_at FROM password_change_logs WHERE user_id=? AND changed_at > ? ORDER BY changed_at ASC', (user_data['id'], now - 86400)).fetchall()]
+            user_data['password_changes_count'] = len(recent)
+            user_data['password_lock_until'] = (recent[0] + 86400) if len(recent) >= 3 else 0
+            return user_data
 
     def required_user(self, request):
         user = self.user(request)
@@ -328,16 +334,47 @@ class Accounts:
         response.delete_cookie(COOKIE)
         return response
 
+    def save_feedback(self, db, actor, table, record, message, decision):
+        if not isinstance(message, str) or len(message)>2000 or '\x00' in message:
+            raise HTTPException(422, 'Phản hồi tối đa 2.000 ký tự.')
+        message=message.strip()
+        if not message: return None
+        owner=record.get('contributor_id')
+        if not owner or not db.execute('SELECT id FROM user_accounts WHERE id=?',(owner,)).fetchone():
+            raise HTTPException(422, 'Người đóng góp chưa có tài khoản để nhận phản hồi.')
+        preview=next((record.get(k) for k in ('vietnamese_text','vietnamese_meaning','tai_text_final','tai_text_original','suggested_tai_text','suggested_translation','suggested_romanization') if record.get(k)), str(record['id']))
+        return self.s.insert(db,'account_feedback',dict(user_id=owner,entity_table=table,entity_id=str(record['id']),
+            message=message,decision=decision,preview=str(preview)[:500],admin_id=str(actor['id'])))
+
+    def feedback(self, request: Request, offset: int = 0):
+        user=self.required_user(request)
+        if offset<0: raise HTTPException(422, 'Trang không hợp lệ.')
+        with self.s.database() as db:
+            rows=db.execute('SELECT id,entity_table,entity_id,message,decision,preview,read_at,created_at FROM account_feedback WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 21 OFFSET ?', (user['id'],offset)).fetchall()
+            unread=db.execute('SELECT count(*) FROM account_feedback WHERE user_id=? AND read_at IS NULL',(user['id'],)).fetchone()[0]
+        return {'items':[dict(r) for r in rows[:20]],'has_more':len(rows)>20,'unread':unread}
+
+    async def read_feedback(self, request: Request):
+        user=self.required_user(request); data=await self.s.payload(request)
+        fid=self.s.text(data,'id',True,40)
+        with self.s.database() as db:
+            row=db.execute('SELECT id FROM account_feedback WHERE id=? AND user_id=?',(fid,user['id'])).fetchone()
+            if not row: raise HTTPException(404,'Không tìm thấy phản hồi.')
+            db.execute('UPDATE account_feedback SET read_at=coalesce(read_at,?) WHERE id=? AND user_id=?',(int(time.time()),fid,user['id']))
+        return {'ok':True}
+
     def contributions(self, request: Request, kind: str = 'all', status: str = 'all', offset: int = 0):
         user = self.required_user(request)
-        if kind not in ('all', 'word', 'sentence') or status not in ('all', 'pending', 'approved', 'rejected') or offset < 0:
+        if kind not in ('all', 'word', 'sentence', 'translation') or status not in ('all', 'pending', 'approved', 'rejected') or offset < 0:
             raise HTTPException(422, 'Bộ lọc không hợp lệ.')
         union = '''SELECT id,'word' AS kind,coalesce(tai_text_final,tai_text_original) AS tai_text,
             coalesce(romanization_final,romanization_original) AS romanization,vietnamese_meaning AS meaning,status,created_at
             FROM word_contributions WHERE contributor_id=?
             UNION ALL SELECT id,'sentence' AS kind,tai_text_original AS tai_text,romanization,
-            '' AS meaning,status,created_at FROM sentences WHERE contributor_id=?'''
-        clauses, params = [], [user['id'], user['id']]
+            '' AS meaning,status,created_at FROM sentences WHERE contributor_id=?
+            UNION ALL SELECT t.id,'translation' AS kind,s.tai_text_original AS tai_text,s.romanization,
+            t.vietnamese_text AS meaning,t.status,t.created_at FROM translations t JOIN sentences s ON s.id=t.sentence_id WHERE t.contributor_id=?'''
+        clauses, params = [], [user['id'], user['id'],user['id']]
         if kind != 'all': clauses.append('kind=?'); params.append(kind)
         if status != 'all': clauses.append('status=?'); params.append(status)
         where = ' WHERE ' + ' AND '.join(clauses) if clauses else ''
@@ -345,7 +382,7 @@ class Accounts:
             rows = db.execute('SELECT * FROM (' + union + ') c' + where + ' ORDER BY created_at DESC,id DESC LIMIT 21 OFFSET ?',
                               params + [offset]).fetchall()
             stats = db.execute('SELECT status,count(*) AS total FROM (' + union + ') c GROUP BY status',
-                               (user['id'], user['id'])).fetchall()
+                               (user['id'], user['id'],user['id'])).fetchall()
         return {'items': [dict(r) for r in rows[:20]], 'has_more': len(rows) > 20,
                 'counts': {r['status']: r['total'] for r in stats}}
 
@@ -399,21 +436,21 @@ class Accounts:
             raise HTTPException(422, 'Mật khẩu mới và xác nhận mật khẩu chưa khớp.')
 
         now = int(time.time())
-        last_updated = user.get('password_updated_at') or 0
-        cooldown = 3 * 86400
-        if last_updated > 0 and (now - last_updated) < cooldown:
-            remaining = cooldown - (now - last_updated)
-            time_str = format_cooldown_time(remaining)
-            raise HTTPException(429, f'Bạn chỉ có thể đổi mật khẩu 3 ngày một lần. Lần đổi tiếp theo sau {time_str}.')
-
         with self.s.database() as db:
+            recent = [r[0] for r in db.execute('SELECT changed_at FROM password_change_logs WHERE user_id=? AND changed_at > ? ORDER BY changed_at ASC', (user['id'], now - 86400)).fetchall()]
+            if len(recent) >= 3:
+                remaining = (recent[0] + 86400) - now
+                time_str = format_cooldown_time(remaining)
+                raise HTTPException(429, f'Bạn đã đổi mật khẩu 3 lần trong 24 giờ qua. Bạn có thể đổi lại sau {time_str}.')
+
             row = db.execute('SELECT password_hash FROM user_accounts WHERE id=?', (user['id'],)).fetchone()
             if not row or not await run_in_threadpool(verify_password, current_password, row['password_hash']):
                 raise HTTPException(401, 'Mật khẩu hiện tại không chính xác.')
 
             new_hash = await run_in_threadpool(hash_password, new_password)
             db.execute('UPDATE user_accounts SET password_hash=?, password_updated_at=? WHERE id=?', (new_hash, now, user['id']))
-        return {'ok': True, 'password_updated_at': now, 'message': 'Đã cập nhật mật khẩu thành công.'}
+            self.s.insert(db, 'password_change_logs', dict(user_id=user['id'], changed_at=now))
+        return {'ok': True, 'password_updated_at': now, 'password_changes_count': len(recent) + 1, 'message': 'Đã cập nhật mật khẩu thành công.'}
 
     def stats(self, request: Request):
         user = self.required_user(request)
@@ -436,7 +473,11 @@ class Accounts:
                 s_stats['total'] += cnt
 
             score = w_stats['approved'] + s_stats['approved']
-            total = w_stats['total'] + s_stats['total']
+            t_stats={'pending':0,'approved':0,'rejected':0,'total':0}
+            for row in db.execute('SELECT status,count(*) AS cnt FROM translations WHERE contributor_id=? GROUP BY status',(user['id'],)).fetchall():
+                t_stats[row['status']]=int(row['cnt'])
+                t_stats['total']+=int(row['cnt'])
+            total = w_stats['total'] + s_stats['total'] + t_stats['total']
 
             rank = None
             if score > 0:
@@ -452,6 +493,7 @@ class Accounts:
         return {
             'words': w_stats,
             'sentences': s_stats,
+            'translations': t_stats,
             'total': total,
             'score': score,
             'rank': rank
@@ -465,5 +507,6 @@ class Accounts:
             ('auth/reset-password', self.reset, 'POST'), ('me/contributions', self.contributions, 'GET'),
             ('me/profile', self.update_profile, 'POST'), ('me/change-password', self.change_password, 'POST'),
             ('me/stats', self.stats, 'GET'),
+            ('me/feedback', self.feedback, 'GET'), ('me/feedback/read', self.read_feedback, 'POST'),
             ('leaderboard', self.leaderboard, 'GET')):
             self.s.app.add_api_route('/api/' + path, handler, methods=[method])

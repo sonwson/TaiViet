@@ -44,6 +44,11 @@ Hệ thống hỗ trợ học tập, tra cứu và số hóa ngôn ngữ **chữ
 
 4. **Trang quản trị (Admin Dashboard):**
    - Kiểm duyệt các mục đóng góp (Duyệt / Từ chối / Hoàn tác).
+   - Chuyển giữa danh sách gọn và thẻ chi tiết; lọc, chọn trang hoặc toàn bộ kết quả để xóa.
+   - Kiểm tra bản dịch lọc theo `correct`, `needs_correction`, `incorrect`; đánh giá câu lọc theo mức tự nhiên.
+   - Xem tài khoản theo tên/email, mở từ, câu và bản dịch của từng thành viên.
+   - Sửa câu, bản dịch, từ và đề xuất sửa câu, kèm lựa chọn trạng thái duyệt.
+   - Gửi phản hồi trong tài khoản thành viên; lý do từ chối không bắt buộc. Người nhận xem và đánh dấu đã đọc tại **Tôi → Hoạt động & Đóng góp**. Bảng `account_feedback` được tạo tự động khi backend khởi động; chỉ người nhận và backend quản trị được truy cập.
    - Thống kê thời gian thực số lượng bản ghi theo trạng thái.
    - Xuất dữ liệu sạch sang định dạng **JSON** hoặc **CSV** chuẩn UTF-8.
 

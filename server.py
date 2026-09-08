@@ -699,12 +699,14 @@ async def translate(request:Request):
 
 
 @app.get('/api/review-queue')
-def review_queue(request:Request,offset:int=0,limit:int=20,status:str='approved',sentence_status:str='all',source:str='all',meaning:str='has_meaning',roman:str='all'):
+def review_queue(request:Request,offset:int=0,limit:int=20,status:str='approved',sentence_status:str='all',source:str='all',meaning:str='has_meaning',roman:str='all',validation_status:str='all'):
+    if validation_status not in ('all','unchecked','correct','needs_correction','incorrect'): raise HTTPException(422,'Kết quả kiểm tra không hợp lệ.')
     s=session(request)
     if offset<0: raise HTTPException(422,'Offset không hợp lệ')
     limit=min(max(1,limit),100)
     with database() as db:
         if meaning=='no_meaning':
+            if validation_status not in ('all','unchecked'): return {'items':[]}
             clauses=[
                 "NOT EXISTS (SELECT 1 FROM translations tr WHERE tr.sentence_id=s.id AND length(trim(tr.vietnamese_text))>0)",
                 "(s.contributor_id IS NULL OR s.contributor_id<>?)",
@@ -740,6 +742,10 @@ def review_queue(request:Request,offset:int=0,limit:int=20,status:str='approved'
                 'NOT EXISTS (SELECT 1 FROM sentence_reviews sr WHERE sr.sentence_id=t.sentence_id AND sr.contributor_id=?)'
             ]
             params=[s['id'],s['id'],s['id']]
+            if validation_status=='unchecked':
+                clauses.append('NOT EXISTS (SELECT 1 FROM translation_validations v WHERE v.translation_id=t.id)')
+            elif validation_status!='all':
+                clauses.append('EXISTS (SELECT 1 FROM translation_validations v WHERE v.translation_id=t.id AND v.validation_status=?)'); params.append(validation_status)
             if status!='all':
                 clauses.append('t.status=?'); params.append(status)
             if sentence_status!='all':
@@ -881,17 +887,36 @@ def word_meanings(tai:str='',roman:str=''):
 
 
 MODERATED={'sentences','translations','word_contributions','annotations','lexemes','word_senses','romanization_corrections','sentence_submissions','sentence_corrections'}
-READABLE=MODERATED|{'translation_validations','sentence_reviews','moderation_events'}
-def admin_filter(table, status, q):
-    if table not in READABLE or status not in ('all','pending','approved','rejected') or not isinstance(q,str) or len(q)>120:
+READABLE=MODERATED|{'translation_validations','sentence_reviews','moderation_events','user_accounts'}
+
+def admin_statuses(table):
+    return {'translation_validations':('validation_status',('correct','needs_correction','incorrect')),
+            'sentence_reviews':('naturalness',('natural','problematic','unsure')),
+            'moderation_events':('new_status',('approved','rejected','pending','deleted','edited')),
+            'user_accounts':('role',('user','admin'))}.get(table,('status',('pending','approved','rejected')))
+
+def admin_filter(table, status, q, contributor_id=''):
+    if not isinstance(table,str) or table not in READABLE or not isinstance(q,str) or len(q)>120:
         raise HTTPException(422,'Bộ lọc không hợp lệ.')
+    field,allowed=admin_statuses(table)
+    if status not in ('all',*allowed): raise HTTPException(422,'Trạng thái không phù hợp với loại dữ liệu.')
     clauses=[]; params=[]
-    if status!='all' and table in MODERATED: clauses.append('status=?'); params.append(status)
+    if status!='all': clauses.append(f'{field}=?'); params.append(status)
+    if contributor_id:
+        try: contributor_id=str(uuid.UUID(contributor_id))
+        except (ValueError,TypeError,AttributeError): raise HTTPException(422,'Tài khoản không hợp lệ.')
+        owner_field='id' if table=='user_accounts' else 'admin_id' if table=='moderation_events' else 'contributor_id'
+        if table in ('lexemes','word_senses'): raise HTTPException(422,'Loại dữ liệu không hỗ trợ lọc người đóng góp.')
+        clauses.append(f'{owner_field}=?'); params.append(contributor_id)
     fields={'sentences':'tai_text_original','translations':'vietnamese_text','word_contributions':'vietnamese_meaning','lexemes':'tai_text_original','word_senses':'vietnamese_meaning','sentence_submissions':'romanization_final','romanization_corrections':'suggested_romanization','sentence_corrections':'suggested_tai_text'}
     fields.update({'translation_validations':'suggested_translation','sentence_reviews':'naturalness','moderation_events':'entity_table','annotations':'annotation_data'})
     if q:
         q_pat='%'+q.strip()+'%'
-        if table=='word_contributions':
+        if table=='user_accounts':
+            clauses.append('(LOWER(display_name) LIKE LOWER(?) OR LOWER(email) LIKE LOWER(?))'); params.extend([q_pat,q_pat])
+        elif table=='translation_validations':
+            clauses.append('(LOWER(suggested_translation) LIKE LOWER(?) OR translation_id IN (SELECT id FROM translations WHERE LOWER(vietnamese_text) LIKE LOWER(?)))'); params.extend([q_pat,q_pat])
+        elif table=='word_contributions':
             clauses.append('(coalesce(tai_text_final,tai_text_original) LIKE ? OR LOWER(coalesce(romanization_final,romanization_original)) LIKE LOWER(?) OR LOWER(vietnamese_meaning) LIKE LOWER(?))')
             params.extend([q_pat,q_pat,q_pat])
         elif table=='sentences':
@@ -906,14 +931,24 @@ def admin_filter(table, status, q):
     return where, params
 
 @app.get('/api/admin/records')
-def admin_records(request:Request,table:str='sentences',status:str='pending',q:str='',offset:int=0):
+def admin_records(request:Request,table:str='sentences',status:str='pending',q:str='',offset:int=0,contributor_id:str=''):
     admin(request)
-    if table not in READABLE or offset<0 or len(q)>120 or status not in ('all','pending','approved','rejected'): raise HTTPException(422,'Bộ lọc không hợp lệ.')
+    if offset<0: raise HTTPException(422,'Bộ lọc không hợp lệ.')
     with database() as db:
-        where,params=admin_filter(table,status,q)
+        where,params=admin_filter(table,status,q,contributor_id)
         total=db.execute(f'SELECT count(*) FROM {table}{where}',params).fetchone()[0]
-        raw_rows=db.execute(f'SELECT * FROM {table}{where} ORDER BY created_at DESC,id LIMIT 30 OFFSET ?',params+[offset]).fetchall()
+        columns='id,email,display_name,role,created_at' if table=='user_accounts' else '*'
+        raw_rows=db.execute(f'SELECT {columns} FROM {table}{where} ORDER BY created_at DESC,id LIMIT 30 OFFSET ?',params+[offset]).fetchall()
         raw_rows=[dict(r) for r in raw_rows]
+        if table=='user_accounts':
+            kinds=('sentences','translations','word_contributions')
+            counts={str(row['id']):dict.fromkeys(kinds,0) for row in raw_rows}
+            if raw_rows:
+                owners=[row['id'] for row in raw_rows]; marks=','.join('?' for _ in owners)
+                query=' UNION ALL '.join(f"SELECT contributor_id,'{kind}' AS kind,count(*) AS total FROM {kind} WHERE contributor_id IN ({marks}) GROUP BY contributor_id" for kind in kinds)
+                for row in db.execute(query,owners*len(kinds)).fetchall(): counts[str(row['contributor_id'])][row['kind']]=row['total']
+            for row in raw_rows: row['counts']=counts[str(row['id'])]
+            return {'items':raw_rows,'total':total}
         items=[]
         if raw_rows:
             if table=='translation_validations':
@@ -921,12 +956,13 @@ def admin_records(request:Request,table:str='sentences',status:str='pending',q:s
                 tr_map={}
                 if tids:
                     placeholders=','.join('?' for _ in tids)
-                    trs=db.execute(f'SELECT t.id, s.tai_text_original, t.vietnamese_text FROM translations t JOIN sentences s ON s.id=t.sentence_id WHERE t.id IN ({placeholders})',tids).fetchall()
+                    trs=db.execute(f'SELECT t.id, t.sentence_id, s.tai_text_original, t.vietnamese_text FROM translations t JOIN sentences s ON s.id=t.sentence_id WHERE t.id IN ({placeholders})',tids).fetchall()
                     tr_map={t['id']:t for t in trs}
                 for r in raw_rows:
                     d=dict(r)
                     tr=tr_map.get(d.get('translation_id'))
                     if tr:
+                        d['sentence_id']=tr['sentence_id']
                         d['sentence_tai']=tr['tai_text_original']
                         d['vietnamese_text']=tr['vietnamese_text']
                     items.append(d)
@@ -939,52 +975,129 @@ def admin_records(request:Request,table:str='sentences',status:str='pending',q:s
                     for tr in trs: tr_map[tr['sentence_id']]=tr['vietnamese_text']
                 for r in raw_rows:
                     d=dict(r)
+                    d['sentence_id']=d['id']
+                    d['sentence_tai']=d.get('tai_text_original')
                     if d['id'] in tr_map: d['vietnamese_text']=tr_map[d['id']]
                     items.append(d)
             elif any('sentence_id' in r and r.get('sentence_id') for r in raw_rows):
                 sids=list({r['sentence_id'] for r in raw_rows if r.get('sentence_id')})
                 sent_map={}
+                tr_map={}
                 if sids:
                     placeholders=','.join('?' for _ in sids)
                     sents=db.execute(f'SELECT id, tai_text_original FROM sentences WHERE id IN ({placeholders})',sids).fetchall()
                     sent_map={s['id']:s['tai_text_original'] for s in sents}
+                    trs=db.execute(f'SELECT sentence_id, vietnamese_text FROM translations WHERE sentence_id IN ({placeholders}) ORDER BY created_at ASC',sids).fetchall()
+                    for tr in trs: tr_map[tr['sentence_id']]=tr['vietnamese_text']
                 for r in raw_rows:
                     d=dict(r)
                     if d.get('sentence_id') in sent_map: d['sentence_tai']=sent_map[d['sentence_id']]
+                    if d.get('sentence_id') in tr_map and not d.get('vietnamese_text'): d['vietnamese_text']=tr_map[d['sentence_id']]
                     items.append(d)
             else:
                 items=[dict(r) for r in raw_rows]
+        owners=list({r['contributor_id'] for r in items if r.get('contributor_id')})
+        if owners:
+            marks=','.join('?' for _ in owners)
+            users={str(u['id']):dict(u) for u in db.execute(f'SELECT id,display_name,email FROM user_accounts WHERE id IN ({marks})',owners).fetchall()}
+            for row in items: row['contributor_account']=users.get(str(row.get('contributor_id')))
     return {'items':items,'total':total}
 
 
-def delete_admin_rows(db, table, ids):
+def delete_admin_rows(db, table, ids, target='default'):
     # Remove dependent records first, within the caller's transaction.
     marks=','.join('?' for _ in ids)
     if table=='sentences':
         translations=[r['id'] for r in db.execute(f'SELECT id FROM translations WHERE sentence_id IN ({marks})',ids).fetchall()]
-        if translations: delete_admin_rows(db,'translations',translations)
+        if target=='only_translations':
+            if translations: delete_admin_rows(db,'translations',translations,target='only_translations')
+            return
+        if translations: delete_admin_rows(db,'translations',translations,target='default')
         for child in ('word_sense_examples','sentence_reviews','annotations','sentence_submissions','romanization_corrections','sentence_corrections'):
             db.execute(f'DELETE FROM {child} WHERE sentence_id IN ({marks})',ids)
+        db.execute(f'DELETE FROM sentences WHERE id IN ({marks})',ids)
+        return
     elif table=='translations':
+        sids=[r['sentence_id'] for r in db.execute(f'SELECT sentence_id FROM translations WHERE id IN ({marks})',ids).fetchall() if r['sentence_id']]
         for child in ('translation_validations','word_sense_examples'):
             db.execute(f'DELETE FROM {child} WHERE translation_id IN ({marks})',ids)
+        db.execute(f'DELETE FROM translations WHERE id IN ({marks})',ids)
+        if target=='permanent':
+            for sid in set(sids):
+                delete_admin_rows(db,'sentences',[sid],target='default')
+        elif target!='only_translations':
+            for sid in set(sids):
+                rem=db.execute('SELECT count(*) FROM translations WHERE sentence_id=?',(sid,)).fetchone()[0]
+                if rem==0:
+                    delete_admin_rows(db,'sentences',[sid],target='default')
+        return
+    elif table=='translation_validations':
+        tids=[r['translation_id'] for r in db.execute(f'SELECT translation_id FROM translation_validations WHERE id IN ({marks})',ids).fetchall() if r['translation_id']]
+        db.execute(f'DELETE FROM translation_validations WHERE id IN ({marks})',ids)
+        if tids:
+            delete_admin_rows(db,'translations',list(set(tids)),target=target)
+        return
+    elif table in ('sentence_reviews', 'sentence_corrections', 'sentence_submissions', 'romanization_corrections'):
+        sids=[r['sentence_id'] for r in db.execute(f'SELECT sentence_id FROM {table} WHERE id IN ({marks})',ids).fetchall() if r['sentence_id']]
+        if target=='only_translations':
+            if sids:
+                delete_admin_rows(db,'sentences',list(set(sids)),target='only_translations')
+            return
+        elif target=='permanent':
+            db.execute(f'DELETE FROM {table} WHERE id IN ({marks})',ids)
+            if sids:
+                delete_admin_rows(db,'sentences',list(set(sids)),target='permanent')
+            return
+        else:
+            db.execute(f'DELETE FROM {table} WHERE id IN ({marks})',ids)
+            return
     elif table=='lexemes':
+        for lid in ids:
+            lex=db.execute('SELECT tai_text_original FROM lexemes WHERE id=?',(lid,)).fetchone()
+            if lex and lex['tai_text_original']:
+                db.execute('DELETE FROM word_contributions WHERE tai_text_original=? OR tai_text_final=?',(lex['tai_text_original'],lex['tai_text_original']))
         senses=[r['id'] for r in db.execute(f'SELECT id FROM word_senses WHERE lexeme_id IN ({marks})',ids).fetchall()]
-        if senses: delete_admin_rows(db,'word_senses',senses)
+        if senses: delete_admin_rows(db,'word_senses',senses,target='default')
         for child in ('lexeme_search_keys','orthography_analyses'):
             db.execute(f'DELETE FROM {child} WHERE lexeme_id IN ({marks})',ids)
     elif table=='word_senses':
         db.execute(f'DELETE FROM word_sense_examples WHERE word_sense_id IN ({marks})',ids)
+    elif table=='word_contributions':
+        if target in ('permanent', 'words_permanent'):
+            for wid in ids:
+                wc=db.execute('SELECT * FROM word_contributions WHERE id=?',(wid,)).fetchone()
+                if wc:
+                    wcd=dict(wc)
+                    tai=wcd.get('tai_text_final') or wcd.get('tai_text_original')
+                    if tai:
+                        lexes=[l['id'] for l in db.execute('SELECT id FROM lexemes WHERE tai_text_original=?',(tai,)).fetchall()]
+                        if lexes: delete_admin_rows(db,'lexemes',lexes,target='default')
+        elif target!='only_contributions':
+            for wid in ids:
+                wc=db.execute('SELECT * FROM word_contributions WHERE id=?',(wid,)).fetchone()
+                if wc:
+                    wcd=dict(wc)
+                    tai=wcd.get('tai_text_final') or wcd.get('tai_text_original')
+                    meaning=wcd.get('vietnamese_meaning')
+                    if tai:
+                        lex=db.execute('SELECT id FROM lexemes WHERE tai_text_original=?',(tai,)).fetchone()
+                        if lex:
+                            lid=lex['id']
+                            if meaning:
+                                senses=[s['id'] for s in db.execute('SELECT id FROM word_senses WHERE lexeme_id=? AND vietnamese_meaning=?',(lid,meaning)).fetchall()]
+                                if senses: delete_admin_rows(db,'word_senses',senses,target='default')
+                            rem=db.execute('SELECT count(*) FROM word_senses WHERE lexeme_id=?',(lid,)).fetchone()[0]
+                            if rem==0: delete_admin_rows(db,'lexemes',[lid],target='default')
     db.execute(f'DELETE FROM {table} WHERE id IN ({marks})',ids)
 
 
 @app.post('/api/admin/delete')
 async def delete_admin_records(request:Request):
     actor=admin(request); p=await payload(request)
-    table=p.get('table'); status=p.get('status','all'); q=p.get('q','')
-    if not isinstance(table,str) or table not in READABLE-{'moderation_events'}:
+    table=p.get('table'); status=p.get('status','all'); q=p.get('q',''); target=p.get('target','default')
+    if not isinstance(table,str) or table not in READABLE-{'moderation_events','user_accounts'}:
         raise HTTPException(422,'Loại dữ liệu không được phép xóa.')
-    where,params=admin_filter(table,status,q)
+    where,params=admin_filter(table,status,q,p.get('contributor_id',''))
     if p.get('scope')=='selected':
         ids=p.get('ids')
         if not isinstance(ids,list) or not 1<=len(ids)<=30 or any(not isinstance(i,str) or not i or len(i)>40 for i in ids):
@@ -1004,10 +1117,54 @@ async def delete_admin_records(request:Request):
             raise HTTPException(409,'Dữ liệu đã thay đổi. Hãy tải lại và chọn lại trước khi xóa.')
         for offset in range(0,len(rows),200):
             batch=rows[offset:offset+200]
-            delete_admin_rows(db,table,[r['id'] for r in batch])
+            delete_admin_rows(db,table,[r['id'] for r in batch],target=target)
             for row in batch:
                 insert(db,'moderation_events',dict(entity_table=table,entity_id=row['id'],previous_status=row.get('status') or 'untracked',new_status='deleted',admin_id=actor['id']))
     return {'ok':True,'deleted':len(rows)}
+
+
+@app.post('/api/admin/feedback')
+async def admin_feedback(request:Request):
+    actor=admin(request); p=await payload(request); table=p.get('table')
+    if not isinstance(table,str) or table not in READABLE-{'moderation_events','user_accounts','lexemes','word_senses'}:
+        raise HTTPException(422,'Loại dữ liệu không hỗ trợ phản hồi.')
+    rid=text(p,'id',True,40)
+    message=p.get('feedback','')
+    if not isinstance(message,str) or not message.strip(): raise HTTPException(422,'Vui lòng nhập phản hồi.')
+    with database() as db:
+        row=db.execute(f'SELECT * FROM {table} WHERE id=?',(rid,)).fetchone()
+        if not row: raise HTTPException(404,'Không tìm thấy bản ghi.')
+        record=dict(row)
+        fid=accounts.save_feedback(db,actor,table,record,message,record.get('status') or record.get('validation_status') or record.get('naturalness') or 'feedback')
+    return {'ok':True,'id':fid}
+
+
+@app.post('/api/admin/records/edit')
+async def admin_edit_record(request:Request):
+    actor=admin(request); p=await payload(request); table=p.get('table')
+    if table not in ('sentences','translations'): raise HTTPException(422,'Loại dữ liệu không hỗ trợ chỉnh sửa.')
+    rid=text(p,'id',True,40); status=p.get('status')
+    if status not in ('pending','approved','rejected'): raise HTTPException(422,'Trạng thái không hợp lệ.')
+    if table=='sentences':
+        tai=text(p,'tai_text_original',True,5000); roman=text(p,'romanization',True,5000)
+    else: meaning=text(p,'vietnamese_text',True,5000)
+    with database() as db:
+        row=db.execute(f'SELECT * FROM {table} WHERE id=?',(rid,)).fetchone()
+        if not row: raise HTTPException(404,'Không tìm thấy bản ghi.')
+        old=dict(row)
+        if table=='sentences':
+            db.execute('UPDATE sentences SET tai_text_original=?,romanization=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(tai,roman,status,rid))
+            # Keep the approved correction overlay consistent with this explicit admin edit.
+            from datetime import datetime,timezone
+            insert(db,'sentence_corrections',dict(sentence_id=rid,base_tai_text=old['tai_text_original'],suggested_tai_text=tai,
+                suggested_romanization=roman,suggested_meaning='',contributor_id=actor['id'],status='approved',
+                created_at=datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f+00:00')))
+            db.execute('UPDATE sentence_submissions SET status=? WHERE sentence_id=?',(status,rid))
+        else:
+            db.execute('UPDATE translations SET vietnamese_text=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(meaning,status,rid))
+        insert(db,'moderation_events',dict(entity_table=table,entity_id=rid,previous_status=old['status'],new_status=status,admin_id=actor['id']))
+        accounts.save_feedback(db,actor,table,old,p.get('feedback',''),status)
+    return {'ok':True}
 
 
 @app.post('/api/admin/words/edit')
@@ -1082,7 +1239,42 @@ async def edit_word_contribution(request:Request):
                     db.execute('UPDATE word_senses SET status=? WHERE lexeme_id=? AND vietnamese_meaning=?',(status,lex['id'],old_meaning))
 
         insert(db,'moderation_events',dict(entity_table='word_contributions',entity_id=wid,previous_status=old_dict['status'],new_status=status,admin_id=s['id']))
+        accounts.save_feedback(db,s,'word_contributions',old_dict,p.get('feedback',''),status)
     return {'ok':True,'message':'Đã cập nhật từ đóng góp thành công (ghi đè bản cũ)!'}
+
+
+@app.post('/api/admin/words/delete-entire')
+async def delete_entire_word(request:Request):
+    actor=admin(request); p=await payload(request)
+    wid=p.get('id')
+    tai=(p.get('tai_text') or '').strip()
+    with database() as db:
+        if wid:
+            wc=db.execute('SELECT * FROM word_contributions WHERE id=?',(wid,)).fetchone()
+            if wc:
+                wcd=dict(wc)
+                if not tai:
+                    tai=(wcd.get('tai_text_final') or wcd.get('tai_text_original') or '').strip()
+        if not tai and not wid:
+            raise HTTPException(422,'Cần cung cấp id đóng góp hoặc chữ Tai để xóa.')
+        lexeme_ids=[]
+        if tai:
+            lex_rows=db.execute('SELECT id FROM lexemes WHERE tai_text_original=?',(tai,)).fetchall()
+            lexeme_ids=[r['id'] for r in lex_rows]
+        if lexeme_ids:
+            delete_admin_rows(db,'lexemes',lexeme_ids)
+        if tai:
+            db.execute('DELETE FROM word_contributions WHERE tai_text_original=? OR tai_text_final=?',(tai,tai))
+        elif wid:
+            db.execute('DELETE FROM word_contributions WHERE id=?',(wid,))
+        insert(db,'moderation_events',dict(
+            entity_table='word_contributions',
+            entity_id=wid or (lexeme_ids[0] if lexeme_ids else 'word:'+tai),
+            previous_status='active',
+            new_status='deleted',
+            admin_id=actor['id']
+        ))
+    return {'ok':True,'message':f'Đã xóa hoàn toàn từ "{tai or wid}" khỏi cơ sở dữ liệu.'}
 
 
 @app.post('/api/admin/sentence-corrections/edit')
@@ -1099,6 +1291,7 @@ async def edit_sentence_correction(request:Request):
         if not old: raise HTTPException(404,'Không tìm thấy bản ghi sửa câu.')
         db.execute('UPDATE sentence_corrections SET suggested_tai_text=?, suggested_romanization=?, suggested_meaning=?, status=? WHERE id=?',
                    (tai,roman,meaning,status,cid))
+        old=dict(old)
         sid=old['sentence_id']
         if status=='approved':
             db.execute("UPDATE sentences SET tai_text_original=?, romanization=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (tai, roman, sid))
@@ -1109,6 +1302,7 @@ async def edit_sentence_correction(request:Request):
                 else:
                     insert(db,'translations',dict(sentence_id=sid,vietnamese_text=meaning.strip(),origin='correction',contributor_id=old.get('contributor_id'),status='approved'))
         insert(db,'moderation_events',dict(entity_table='sentence_corrections',entity_id=cid,previous_status=old['status'],new_status=status,admin_id=s['id']))
+        accounts.save_feedback(db,s,'sentence_corrections',old,p.get('feedback',''),status)
     return {'ok':True,'message':'Đã cập nhật và duyệt câu sửa thành công (ghi đè bản cũ)!'}
 
 
@@ -1117,7 +1311,7 @@ async def moderate(request:Request):
     s=admin(request); p=await payload(request); table=p.get('table'); status=p.get('status'); id=text(p,'id',True,40)
     if table not in MODERATED or status not in ('approved','rejected'): raise HTTPException(422,'Thao tác không hợp lệ.')
     with database() as db:
-        old=db.execute(f'SELECT status FROM {table} WHERE id=?',(id,)).fetchone()
+        old=db.execute(f'SELECT * FROM {table} WHERE id=?',(id,)).fetchone()
         if not old: raise HTTPException(404,'Không tìm thấy bản ghi.')
         db.execute(f'UPDATE {table} SET status=? WHERE id=?',(status,id))
         if table=='sentences':
@@ -1158,6 +1352,7 @@ async def moderate(request:Request):
                     for k in keys:
                         db.execute('INSERT OR IGNORE INTO lexeme_search_keys (lexeme_id,canonical_key,rule_version) VALUES (?,?,?)',(lex_id,k,engine.version))
         insert(db,'moderation_events',dict(entity_table=table,entity_id=id,previous_status=old['status'],new_status=status,admin_id=s['id']))
+        accounts.save_feedback(db,s,table,dict(old),p.get('feedback',''),status)
     return {'ok':True}
 
 

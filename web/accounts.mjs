@@ -58,24 +58,24 @@ export function accountUI({api, node, state, refreshSession, openTab}) {
       }
     }
 
-    // 2. Password Cooldown: 3 days = 259200s
-    const passLast = Number(user.password_updated_at || 0);
-    const passElapsed = now - passLast;
-    const passRemain = (3 * 86400) - passElapsed;
+    // 2. Password Limit: 3 times in 24 hours (1 day = 86400s)
+    const changesCount = Number(user.password_changes_count || 0);
+    const lockUntil = Number(user.password_lock_until || 0);
     const passBox = $('password-cooldown-box');
     const passText = $('password-cooldown-text');
     const passBtn = $('btn-submit-password');
     const passInputs = [$('input-current-pass'), $('input-new-pass'), $('input-confirm-pass')];
 
     if (passBox && passText) {
-      if (passLast > 0 && passRemain > 0) {
+      if (changesCount >= 3 && lockUntil > now) {
+        const passRemain = lockUntil - now;
         passBox.className = 'cooldown-box cooldown-locked';
-        passText.innerHTML = `<strong>Chưa thể đổi mật khẩu:</strong> Bạn chỉ có thể đổi mật khẩu sau mỗi 3 ngày. Lần đổi tiếp theo sau <strong>${formatCooldown(passRemain)}</strong>.`;
+        passText.innerHTML = `<strong>Đã đạt giới hạn đổi mật khẩu:</strong> Bạn chỉ có thể đổi mật khẩu tối đa 3 lần/ngày. Lần đổi tiếp theo sau <strong>${formatCooldown(passRemain)}</strong>.`;
         passInputs.forEach(i => { if (i) i.disabled = true; });
         if (passBtn) passBtn.disabled = true;
       } else {
         passBox.className = 'cooldown-box cooldown-ready';
-        passText.innerHTML = `✓ <strong>Đủ điều kiện:</strong> Bạn có thể đổi mật khẩu mới ngay bây giờ.`;
+        passText.innerHTML = `✓ <strong>Đủ điều kiện:</strong> Bạn đã đổi <strong>${changesCount}/3 lần</strong> trong 24 giờ qua.`;
         passInputs.forEach(i => { if (i) i.disabled = false; });
         if (passBtn) passBtn.disabled = false;
       }
@@ -84,6 +84,7 @@ export function accountUI({api, node, state, refreshSession, openTab}) {
 
   function sessionChanged() {
     const user = state.session?.user;
+    if(!user){feedbackRevision++;$('member-feedback-results').replaceChildren();$('member-feedback-count').textContent='';}
     const isAdmin = Boolean(state.session?.admin || user?.role === 'admin');
 
     $('account-guest').hidden = !!user;
@@ -199,7 +200,7 @@ export function accountUI({api, node, state, refreshSession, openTab}) {
       await refreshSession();
       const msg = $('account-message');
       if (msg) msg.textContent = '';
-      await loadContributions();
+      await Promise.all([loadContributions(),loadFeedback()]);
     });
   }
 
@@ -269,6 +270,40 @@ export function accountUI({api, node, state, refreshSession, openTab}) {
     updateCooldowns();
   }, 'password-message');
 
+  let feedbackOffset=0, feedbackRevision=0;
+  async function loadFeedback(append=false) {
+    if(!state.session?.user)return;
+    const request=++feedbackRevision;
+    if(!append){feedbackOffset=0;$('member-feedback-results').replaceChildren();}
+    $('member-feedback-more').disabled=true;
+    try {
+      const data=await api('me/feedback?offset='+feedbackOffset);
+      if(request!==feedbackRevision||!state.session?.user)return;
+      $('member-feedback-count').textContent=data.unread?`${data.unread} chưa đọc`:'Đã đọc hết';
+      const kinds={sentences:'Câu đóng góp',translations:'Bản dịch',word_contributions:'Từ đóng góp',translation_validations:'Kiểm tra bản dịch',sentence_reviews:'Đánh giá câu',sentence_corrections:'Đề xuất sửa câu',romanization_corrections:'Sửa phiên âm',sentence_submissions:'Nguồn câu'};
+      for(const item of data.items) {
+        const card=node('article',undefined,'member-feedback-record'+(item.read_at?'':' is-unread'));
+        card.append(node('strong',kinds[item.entity_table]||'Đóng góp'),node('span',' · '+(labels[item.decision]||item.decision),'hint'));
+        card.append(node('p',item.preview,'hint'),node('p',item.message));
+        const date=new Date(item.created_at);
+        if(!Number.isNaN(date.getTime()))card.append(node('small',date.toLocaleString('vi-VN'),'hint'));
+        if(!item.read_at) {
+          const read=node('button','Đánh dấu đã đọc','secondary');read.type='button';
+          read.addEventListener('click',async()=>{
+            read.disabled=true;
+            try{await api('me/feedback/read',{id:item.id});await loadFeedback();}
+            catch(e){read.disabled=false;$('member-feedback-count').textContent=e.message;}
+          });card.append(read);
+        }
+        $('member-feedback-results').append(card);
+      }
+      if(!append&&!data.items.length)$('member-feedback-results').append(node('p','Bạn chưa có phản hồi từ quản trị viên.','hint'));
+      feedbackOffset+=data.items.length;$('member-feedback-more').hidden=!data.has_more;
+    } catch(e) { if(request===feedbackRevision)$('member-feedback-count').textContent=e.message; }
+    finally { if(request===feedbackRevision)$('member-feedback-more').disabled=false; }
+  }
+  $('member-feedback-more').addEventListener('click',()=>loadFeedback(true));
+
   async function loadContributions(append = false) {
     if (!state.session?.user) return;
     const current = ++revision;
@@ -300,7 +335,7 @@ export function accountUI({api, node, state, refreshSession, openTab}) {
         const card = node('article', undefined, 'contribution-record');
         const meta = node('div', undefined, 'record-meta');
         meta.append(
-          node('span', item.kind === 'word' ? 'TỪ ĐÓNG GÓP' : 'CÂU ĐÓNG GÓP', 'eyebrow'),
+          node('span', ({word:'TỪ ĐÓNG GÓP',sentence:'CÂU ĐÓNG GÓP',translation:'BẢN DỊCH ĐÓNG GÓP'})[item.kind], 'eyebrow'),
           node('span', labels[item.status] || item.status, 'status-badge status-' + item.status)
         );
         card.append(meta, node('h3', item.tai_text || 'Chưa có chữ Tai', 'tai'), node('p', item.romanization || 'Chưa có phiên âm'));
@@ -340,9 +375,9 @@ export function accountUI({api, node, state, refreshSession, openTab}) {
 
     const cards = [
       { label: 'Tổng đóng góp', count: stats.total, cls: 'stat-total' },
-      { label: 'Đã duyệt', count: stats.words.approved + stats.sentences.approved, cls: 'stat-approved' },
-      { label: 'Chờ duyệt', count: stats.words.pending + stats.sentences.pending, cls: 'stat-pending' },
-      { label: 'Từ chối', count: stats.words.rejected + stats.sentences.rejected, cls: 'stat-rejected' }
+      { label: 'Đã duyệt', count: stats.words.approved + stats.sentences.approved + (stats.translations?.approved||0), cls: 'stat-approved' },
+      { label: 'Chờ duyệt', count: stats.words.pending + stats.sentences.pending + (stats.translations?.pending||0), cls: 'stat-pending' },
+      { label: 'Từ chối', count: stats.words.rejected + stats.sentences.rejected + (stats.translations?.rejected||0), cls: 'stat-rejected' }
     ];
 
     for (const c of cards) {
@@ -367,6 +402,11 @@ export function accountUI({api, node, state, refreshSession, openTab}) {
       wCard.querySelector('h4').prepend(icon('book'));
       sCard.querySelector('h4').prepend(icon('message'));
       detailContainer.append(wCard, sCard);
+      if(stats.translations) {
+        const t=stats.translations,card=node('div',undefined,'detail-stat-card');
+        card.append(node('h4','Bản dịch đóng góp'),node('p',`Tổng: ${t.total} (${t.approved} đã duyệt · ${t.pending} chờ duyệt · ${t.rejected} từ chối)`));
+        detailContainer.append(card);
+      }
     }
   }
 
@@ -403,7 +443,7 @@ export function accountUI({api, node, state, refreshSession, openTab}) {
     table.append(caption,head,body);container.append(table);
   }
   return {sessionChanged,async open(id){
-    if(id==='account')await loadContributions();
+    if(id==='account')await Promise.all([loadContributions(),loadFeedback()]);
     if(id==='leaderboard')await leaderboard();
     if(id==='reset-password'&&!resetToken)$('reset-message').textContent='Liên kết không hợp lệ. Hãy yêu cầu liên kết mới.';
   }};

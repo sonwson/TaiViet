@@ -24,6 +24,7 @@ class CorrectionsAndFiltersTests(unittest.TestCase):
         records = json.loads((ROOT / 'data/taiviet_dictionary_dataset.json').read_text(encoding='utf-8'))[:5]
         load_sqlite(server.DB_PATH, build(records)[0])
         server.upgrade(server.DB_PATH, server.engine)
+        server.accounts.initialize()
         self.client = TestClient(server.app)
         self.client.get('/api/session')
 
@@ -286,6 +287,210 @@ class CorrectionsAndFiltersTests(unittest.TestCase):
         second_item = r2.json()['items'][0]
         self.assertNotEqual(second_item['sentence_id'], first_sentence_id)
         self.assertNotEqual(second_item['id'], first_trans_id)
+
+    def test_password_change_limit_three_times_in_24_hours(self):
+        # Register a test account
+        email = 'pwdtest@example.com'
+        r_reg = self.client.post('/api/auth/register', json={
+            'email': email,
+            'password': 'Password123!',
+            'display_name': 'PasswordTester'
+        })
+        self.assertEqual(r_reg.status_code, 200)
+
+        # 1st change: success
+        r1 = self.client.post('/api/me/change-password', json={
+            'current_password': 'Password123!',
+            'new_password': 'Password456!',
+            'confirm_password': 'Password456!'
+        })
+        self.assertEqual(r1.status_code, 200)
+        self.assertEqual(r1.json()['password_changes_count'], 1)
+
+        # 2nd change: success
+        r2 = self.client.post('/api/me/change-password', json={
+            'current_password': 'Password456!',
+            'new_password': 'Password789!',
+            'confirm_password': 'Password789!'
+        })
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r2.json()['password_changes_count'], 2)
+
+        # 3rd change: success
+        r3 = self.client.post('/api/me/change-password', json={
+            'current_password': 'Password789!',
+            'new_password': 'Password321!',
+            'confirm_password': 'Password321!'
+        })
+        self.assertEqual(r3.status_code, 200)
+        self.assertEqual(r3.json()['password_changes_count'], 3)
+
+        # 4th change: MUST be blocked with 429
+        r4 = self.client.post('/api/me/change-password', json={
+            'current_password': 'Password321!',
+            'new_password': 'Password999!',
+            'confirm_password': 'Password999!'
+        })
+        self.assertEqual(r4.status_code, 429)
+        err_msg = r4.json().get('detail') or r4.json().get('message', '')
+        self.assertIn('3 lần trong 24 giờ qua', err_msg)
+
+        # Check session user returns count and lock_until
+        r_me = self.client.get('/api/session')
+        self.assertEqual(r_me.status_code, 200)
+        user = r_me.json()['user']
+        self.assertEqual(user['password_changes_count'], 3)
+        self.assertGreater(user['password_lock_until'], 0)
+
+    def test_admin_delete_entire_word(self):
+        # Contribute a word and approve it into lexemes/word_senses
+        r_create = self.post('words', {
+            'tai_text_original': 'ꪹꪄꪱ꫁_del',
+            'romanization_original': 'khao_del',
+            'vietnamese_meaning': 'gạo xóa toàn bộ'
+        })
+        self.assertEqual(r_create.status_code, 200)
+        wid = r_create.json()['id']
+
+        self.login()
+        r_app = self.client.post('/api/admin/moderate', json={'table': 'word_contributions', 'id': wid, 'status': 'approved'})
+        self.assertEqual(r_app.status_code, 200)
+
+        with server.database() as db:
+            lex = db.execute('SELECT * FROM lexemes WHERE tai_text_original=?', ('ꪹꪄꪱ꫁_del',)).fetchone()
+            self.assertIsNotNone(lex)
+            lid = lex['id']
+            senses = db.execute('SELECT * FROM word_senses WHERE lexeme_id=?', (lid,)).fetchall()
+            self.assertTrue(len(senses) > 0)
+            wc = db.execute('SELECT * FROM word_contributions WHERE id=?', (wid,)).fetchone()
+            self.assertIsNotNone(wc)
+
+        # Call delete-entire
+        r_del = self.client.post('/api/admin/words/delete-entire', json={'id': wid})
+        self.assertEqual(r_del.status_code, 200)
+        self.assertIn('Đã xóa hoàn toàn', r_del.json()['message'])
+
+        # Verify everything is gone
+        with server.database() as db:
+            self.assertIsNone(db.execute('SELECT * FROM lexemes WHERE id=?', (lid,)).fetchone())
+            self.assertEqual(len(db.execute('SELECT * FROM word_senses WHERE lexeme_id=?', (lid,)).fetchall()), 0)
+            self.assertEqual(len(db.execute('SELECT * FROM lexeme_search_keys WHERE lexeme_id=?', (lid,)).fetchall()), 0)
+            self.assertEqual(len(db.execute('SELECT * FROM word_contributions WHERE tai_text_original=?', ('ꪹꪄꪱ꫁_del',)).fetchall()), 0)
+            # Moderation event recorded
+            mod = db.execute("SELECT * FROM moderation_events WHERE entity_table='word_contributions' AND new_status='deleted' ORDER BY id DESC LIMIT 1").fetchone()
+            self.assertIsNotNone(mod)
+
+    def test_admin_cascade_delete_word_contribution_removes_sense(self):
+        # Contribute a word and approve it
+        r_create = self.post('words', {
+            'tai_text_original': 'ꪹꪄꪱ꫁_casc',
+            'romanization_original': 'khao_casc',
+            'vietnamese_meaning': 'nghĩa đơn cascade'
+        })
+        self.assertEqual(r_create.status_code, 200)
+        wid = r_create.json()['id']
+
+        self.login()
+        r_app = self.client.post('/api/admin/moderate', json={'table': 'word_contributions', 'id': wid, 'status': 'approved'})
+        self.assertEqual(r_app.status_code, 200)
+
+        with server.database() as db:
+            lex = db.execute('SELECT * FROM lexemes WHERE tai_text_original=?', ('ꪹꪄꪱ꫁_casc',)).fetchone()
+            self.assertIsNotNone(lex)
+            lid = lex['id']
+
+        # Delete the contribution using /api/admin/delete
+        r_del = self.client.post('/api/admin/delete', json={
+            'table': 'word_contributions',
+            'scope': 'selected',
+            'ids': [wid],
+            'expected_count': 1
+        })
+        self.assertEqual(r_del.status_code, 200)
+
+        # Verify lexeme and sense were cleaned up since no senses remain
+        with server.database() as db:
+            self.assertIsNone(db.execute('SELECT * FROM lexemes WHERE id=?', (lid,)).fetchone())
+            self.assertEqual(len(db.execute('SELECT * FROM word_senses WHERE lexeme_id=?', (lid,)).fetchall()), 0)
+
+    def test_admin_delete_translation_validation_cascades_to_sentence_and_translation(self):
+        with server.database() as db:
+            sid = server.insert(db, 'sentences', dict(tai_text_original='ꪹꪚ꪿ꪱ ꪁꪱꪙ ꪎꪷ', romanization='bau kan so', status='approved'))
+            tid = server.insert(db, 'translations', dict(sentence_id=sid, vietnamese_text='ai hỏi (Thử nghiệm)', status='approved'))
+            vid = server.insert(db, 'translation_validations', dict(translation_id=tid, validation_status='incorrect', contributor_id='tester', consent_version=server.CONSENT))
+
+        self.login()
+        r_del = self.client.post('/api/admin/delete', json={
+            'table': 'translation_validations',
+            'scope': 'selected',
+            'ids': [vid],
+            'expected_count': 1
+        })
+        self.assertEqual(r_del.status_code, 200)
+
+        with server.database() as db:
+            self.assertIsNone(db.execute('SELECT * FROM translation_validations WHERE id=?', (vid,)).fetchone())
+            self.assertIsNone(db.execute('SELECT * FROM translations WHERE id=?', (tid,)).fetchone())
+            self.assertIsNone(db.execute('SELECT * FROM sentences WHERE id=?', (sid,)).fetchone())
+
+    def test_admin_delete_sentence_only_translations_vs_permanent(self):
+        with server.database() as db:
+            s1 = server.insert(db, 'sentences', dict(tai_text_original='ꪀꪱ_test_s1', romanization='ka1', status='approved'))
+            t1 = server.insert(db, 'translations', dict(sentence_id=s1, vietnamese_text='nghĩa s1', status='approved'))
+
+            s2 = server.insert(db, 'sentences', dict(tai_text_original='ꪀꪱ_test_s2', romanization='ka2', status='approved'))
+            t2 = server.insert(db, 'translations', dict(sentence_id=s2, vietnamese_text='nghĩa s2', status='approved'))
+
+        self.login()
+        # 1. Delete only translations for s1
+        r1 = self.client.post('/api/admin/delete', json={
+            'table': 'sentences',
+            'target': 'only_translations',
+            'scope': 'selected',
+            'ids': [s1],
+            'expected_count': 1
+        })
+        self.assertEqual(r1.status_code, 200)
+        with server.database() as db:
+            # Translation t1 is deleted
+            self.assertIsNone(db.execute('SELECT * FROM translations WHERE id=?', (t1,)).fetchone())
+            # Sentence s1 is preserved!
+            self.assertIsNotNone(db.execute('SELECT * FROM sentences WHERE id=?', (s1,)).fetchone())
+
+        # 2. Delete permanent for s2
+        r2 = self.client.post('/api/admin/delete', json={
+            'table': 'sentences',
+            'target': 'permanent',
+            'scope': 'selected',
+            'ids': [s2],
+            'expected_count': 1
+        })
+        self.assertEqual(r2.status_code, 200)
+        with server.database() as db:
+            # Both translation and sentence are completely deleted
+            self.assertIsNone(db.execute('SELECT * FROM translations WHERE id=?', (t2,)).fetchone())
+            self.assertIsNone(db.execute('SELECT * FROM sentences WHERE id=?', (s2,)).fetchone())
+
+    def test_admin_delete_sentence_review_only_translations(self):
+        with server.database() as db:
+            s = server.insert(db, 'sentences', dict(tai_text_original='ꪀꪱ_test_sr', romanization='ka_sr', status='approved'))
+            t = server.insert(db, 'translations', dict(sentence_id=s, vietnamese_text='nghĩa sr', status='approved'))
+            r_id = server.insert(db, 'sentence_reviews', dict(sentence_id=s, naturalness='natural', contributor_id='tester', consent_version=server.CONSENT))
+
+        self.login()
+        res = self.client.post('/api/admin/delete', json={
+            'table': 'sentence_reviews',
+            'target': 'only_translations',
+            'scope': 'selected',
+            'ids': [r_id],
+            'expected_count': 1
+        })
+        self.assertEqual(res.status_code, 200)
+        with server.database() as db:
+            # Translation is deleted
+            self.assertIsNone(db.execute('SELECT * FROM translations WHERE id=?', (t,)).fetchone())
+            # Sentence s is preserved
+            self.assertIsNotNone(db.execute('SELECT * FROM sentences WHERE id=?', (s,)).fetchone())
 
 if __name__ == '__main__':
     unittest.main()
