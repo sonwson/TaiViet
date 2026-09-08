@@ -1,5 +1,19 @@
 
 
+.admin-selection { padding: 18px; margin: 20px 0; border: 1px solid var(--color-border); border-radius: 12px; background: #fff; }
+.admin-selection-info, .admin-selection-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.admin-selection-actions { margin-top: 12px; }
+.admin-selection small { display: block; margin-top: 12px; color: var(--color-text-secondary); }
+.admin-row-select { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; }
+.admin-row-select input[type="checkbox"] { width: 18px; height: 18px; margin: 0; accent-color: var(--color-primary); }
+.record.record-selected { border-color: var(--color-primary); background: #f0fdf4; }
+button.btn-danger { background: #b91c1c; color: white; border: 1px solid #b91c1c; }
+button.btn-danger:hover:not(:disabled) { background: #991b1b; }
+.admin-delete-dialog { width: min(560px, calc(100% - 32px)); border: 0; border-radius: 16px; padding: 24px; color: var(--color-text); box-shadow: 0 20px 60px #0003; }
+.admin-delete-dialog::backdrop { background: #10271999; }
+.admin-delete-warning { background: #fef2f2; color: #991b1b; padding: 14px; border-radius: 8px; }
+@media (max-width: 600px) { .admin-selection-actions button { flex: 1 1 140px; } }
+
 /* ---------- Font Faces ---------- */
 @font-face {
   font-family: "Roboto Slab";

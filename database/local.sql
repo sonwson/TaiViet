@@ -90,9 +90,7 @@ CREATE INDEX IF NOT EXISTS idx_sentences_status ON sentences(status);
 CREATE INDEX IF NOT EXISTS idx_translations_status ON translations(status);
 CREATE INDEX IF NOT EXISTS idx_contributions_status ON word_contributions(status);
 CREATE INDEX IF NOT EXISTS idx_annotations_sentence ON annotations(sentence_id);
-CREATE TRIGGER IF NOT EXISTS immutable_sentence BEFORE UPDATE OF tai_text_original,romanization,source_type,source_reference,region_original,contributor_id,consent_version ON sentences
-BEGIN SELECT RAISE(ABORT,'Original sentence fields are immutable'); END;
-CREATE TRIGGER IF NOT EXISTS immutable_translation BEFORE UPDATE OF vietnamese_text,sentence_id,origin,contributor_id,consent_version ON translations
-BEGIN SELECT RAISE(ABORT,'Translations are append only'); END;
+DROP TRIGGER IF EXISTS immutable_sentence;
+DROP TRIGGER IF EXISTS immutable_translation;
 CREATE TRIGGER IF NOT EXISTS immutable_sources BEFORE UPDATE ON source_records
 BEGIN SELECT RAISE(ABORT,'Source archive is immutable'); END;

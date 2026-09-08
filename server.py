@@ -343,7 +343,14 @@ def insert(db,table,row):
 def approved(db,table,id):
     row=db.execute(f'SELECT * FROM {table} WHERE id=? AND status=?',(id,'approved')).fetchone()
     if not row: raise HTTPException(404,'Không tìm thấy dữ liệu đã duyệt.')
-    return row
+    return dict(row) if row else None
+
+
+def get_record(db,table,id,approved_only=False):
+    if approved_only: return approved(db,table,id)
+    row=db.execute(f'SELECT * FROM {table} WHERE id=?',(id,)).fetchone()
+    if not row: raise HTTPException(404,f'Không tìm thấy bản ghi trong {table}.')
+    return dict(row) if row else None
 
 
 @app.get('/api/session')
@@ -517,9 +524,16 @@ def batch_sentence_details(db,rows):
     sids=[r.get('sentence_id') or r['id'] for r in rows]
     placeholders=','.join('?' for _ in sids)
 
-    trans_rows=db.execute(f"SELECT id, sentence_id, vietnamese_text FROM translations WHERE sentence_id IN ({placeholders}) AND status='approved' ORDER BY created_at,id", sids).fetchall()
+    trans_rows=db.execute(f"SELECT id, sentence_id, vietnamese_text, status FROM translations WHERE sentence_id IN ({placeholders}) ORDER BY (status='approved') DESC, created_at,id", sids).fetchall()
+    sent_status_map = {r.get('sentence_id') or r['id']: r.get('status') for r in rows}
     trans_map=defaultdict(list)
-    for tr in trans_rows: trans_map[tr['sentence_id']].append(dict(tr))
+    for tr in trans_rows:
+        sid = tr['sentence_id']
+        if sent_status_map.get(sid) == 'approved':
+            if tr['status'] == 'approved':
+                trans_map[sid].append(dict(tr))
+        else:
+            trans_map[sid].append(dict(tr))
 
     sent_corr_rows=db.execute(f"SELECT id, sentence_id, suggested_tai_text, suggested_romanization FROM sentence_corrections WHERE sentence_id IN ({placeholders}) AND status='approved' ORDER BY created_at DESC", sids).fetchall()
     sent_corr_map={}
@@ -587,7 +601,7 @@ async def correct_romanization(request:Request):
     p=await payload(request);sid=text(p,'sentence_id',True,40);suggested=text(p,'suggested_romanization',True)
     s=submission(request,p)
     with database() as db:
-        sentence=sentence_details(db,approved(db,'sentences',sid))
+        sentence=sentence_details(db,get_record(db,'sentences',sid))
         id=insert(db,'romanization_corrections',dict(sentence_id=sid,base_romanization=sentence.get('romanization'),
             suggested_romanization=suggested,base_source=sentence['romanization_source'],rule_version=engine.version,
             analysis=sentence.get('romanization_suggestions',{}),contributor_id=s['id'],status='pending'))
@@ -600,30 +614,35 @@ async def correct_sentence(request:Request):
     sid=text(p,'sentence_id',True,40)
     tai=text(p,'suggested_tai_text',True,5000)
     roman=text(p,'suggested_romanization',True,5000)
-    meaning=text(p,'suggested_meaning',False,5000) or ''
+    meaning=text(p,'suggested_meaning',True,5000)
     s=submission(request,p)
     is_admin=bool(s.get('admin'))
     status='approved' if is_admin else 'pending'
     with database() as db:
-        sent=approved(db,'sentences',sid)
+        sent=get_record(db,'sentences',sid)
         cid=insert(db,'sentence_corrections',dict(
             sentence_id=sid,base_tai_text=sent.get('tai_text_original'),
             suggested_tai_text=tai,suggested_romanization=roman,suggested_meaning=meaning,
             contributor_id=s['id'],status=status
         ))
         if is_admin:
+            db.execute("UPDATE sentences SET tai_text_original=?, romanization=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (tai, roman, sid))
             if meaning and meaning.strip():
-                insert(db,'translations',dict(
-                    sentence_id=sid,vietnamese_text=meaning.strip(),origin='admin_correction',
-                    contributor_id=s['id'],status='approved'
-                ))
+                existing_tr=db.execute("SELECT id FROM translations WHERE sentence_id=? ORDER BY (status='approved') DESC, created_at LIMIT 1", (sid,)).fetchone()
+                if existing_tr:
+                    db.execute("UPDATE translations SET vietnamese_text=?, status='approved', updated_at=CURRENT_TIMESTAMP WHERE id=?", (meaning.strip(), existing_tr['id']))
+                else:
+                    insert(db,'translations',dict(
+                        sentence_id=sid,vietnamese_text=meaning.strip(),origin='admin_correction',
+                        contributor_id=s['id'],status='approved'
+                    ))
             insert(db,'moderation_events',dict(
                 entity_table='sentence_corrections',entity_id=cid,
                 previous_status='pending',new_status='approved',admin_id=s['id']
             ))
-            msg='Đã cập nhật câu gốc thành công (Quyền Quản trị)!'
+            msg='Đã cập nhật câu gốc, phiên âm và nghĩa thành công (Quyền Quản trị)!'
         else:
-            msg='Đã gửi đề xuất sửa câu gốc để Admin duyệt!'
+            msg='Đã gửi đề xuất sửa câu gốc (kèm phiên âm và nghĩa) để Admin duyệt!'
     return {'id':cid,'status':status,'message':msg}
 
 
@@ -643,16 +662,22 @@ def sentences(request:Request,q:str='',offset:int=0,limit:int=20,status:str='app
     elif source=='dictionary':
         clauses.append("sentences.source_type='dictionary'")
     if meaning=='has_meaning':
-        clauses.append("EXISTS (SELECT 1 FROM translations tr WHERE tr.sentence_id=sentences.id AND tr.status='approved')")
+        if status=='approved':
+            clauses.append("EXISTS (SELECT 1 FROM translations tr WHERE tr.sentence_id=sentences.id AND tr.status='approved' AND length(trim(tr.vietnamese_text))>0)")
+        else:
+            clauses.append("EXISTS (SELECT 1 FROM translations tr WHERE tr.sentence_id=sentences.id AND length(trim(tr.vietnamese_text))>0)")
     elif meaning=='no_meaning':
-        clauses.append("NOT EXISTS (SELECT 1 FROM translations tr WHERE tr.sentence_id=sentences.id AND tr.status='approved')")
+        if status=='approved':
+            clauses.append("NOT EXISTS (SELECT 1 FROM translations tr WHERE tr.sentence_id=sentences.id AND tr.status='approved' AND length(trim(tr.vietnamese_text))>0)")
+        else:
+            clauses.append("NOT EXISTS (SELECT 1 FROM translations tr WHERE tr.sentence_id=sentences.id AND length(trim(tr.vietnamese_text))>0)")
     if roman=='has_roman':
         clauses.append("sentences.romanization IS NOT NULL AND trim(sentences.romanization)<>''")
     elif roman=='no_roman':
         clauses.append("(sentences.romanization IS NULL OR trim(sentences.romanization)='')")
     where=' WHERE '+' AND '.join(clauses) if clauses else ''
     with database() as db:
-        rows=db.execute(f'''SELECT id,tai_text_original,romanization,source_type,region_original FROM sentences
+        rows=db.execute(f'''SELECT id,tai_text_original,romanization,source_type,region_original,status FROM sentences
             {where}
             ORDER BY 
                 CASE WHEN romanization IS NULL OR trim(romanization)='' THEN 0 ELSE 1 END ASC,
@@ -667,43 +692,80 @@ async def translate(request:Request):
     p=await payload(request); sentence_id=text(p,'sentence_id',True,40); vietnamese=text(p,'vietnamese_text',True)
     s=submission(request,p)
     with database() as db:
-        approved(db,'sentences',sentence_id)
+        get_record(db,'sentences',sentence_id)
         id=insert(db,'translations',dict(sentence_id=sentence_id,vietnamese_text=vietnamese,origin='community',
             contributor_id=s['id'],contributor_name=text(p,'contributor_name',maximum=100),consent_version=CONSENT,status='pending'))
     return {'id':id,'status':'pending','message':'Cảm ơn bạn đã đóng góp!'}
 
 
 @app.get('/api/review-queue')
-def review_queue(request:Request,offset:int=0,limit:int=20,status:str='approved',source:str='all',roman:str='all'):
+def review_queue(request:Request,offset:int=0,limit:int=20,status:str='approved',sentence_status:str='all',source:str='all',meaning:str='has_meaning',roman:str='all'):
     s=session(request)
     if offset<0: raise HTTPException(422,'Offset không hợp lệ')
     limit=min(max(1,limit),100)
-    clauses=[
-        '(t.contributor_id IS NULL OR t.contributor_id<>?)',
-        'NOT EXISTS (SELECT 1 FROM translation_validations v WHERE v.translation_id=t.id AND v.contributor_id=?)'
-    ]
-    params=[s['id'],s['id']]
-    if status!='all':
-        clauses.append('t.status=?'); params.append(status)
-    if source=='community':
-        clauses.append("t.origin IN ('community','contributor','correction','admin_correction')")
-    elif source=='dictionary':
-        clauses.append("t.origin='dictionary'")
-    if roman=='has_roman':
-        clauses.append("s.romanization IS NOT NULL AND trim(s.romanization)<>''")
-    elif roman=='no_roman':
-        clauses.append("(s.romanization IS NULL OR trim(s.romanization)='')")
-    where=' WHERE '+' AND '.join(clauses)
     with database() as db:
-        rows=db.execute(f'''SELECT t.id,t.sentence_id,t.vietnamese_text,s.tai_text_original,s.romanization,s.source_type FROM translations t
-            JOIN sentences s ON s.id=t.sentence_id
-            {where}
-            ORDER BY 
-                CASE WHEN s.romanization IS NULL OR trim(s.romanization)='' THEN 0 ELSE 1 END ASC,
-                (SELECT count(*) FROM translation_validations v2 WHERE v2.translation_id=t.id) ASC,
-                t.id ASC
-            LIMIT ? OFFSET ?''',params+[limit,offset]).fetchall()
-        return {'items':batch_sentence_details(db,rows)}
+        if meaning=='no_meaning':
+            clauses=[
+                "NOT EXISTS (SELECT 1 FROM translations tr WHERE tr.sentence_id=s.id AND length(trim(tr.vietnamese_text))>0)",
+                "(s.contributor_id IS NULL OR s.contributor_id<>?)",
+                "NOT EXISTS (SELECT 1 FROM sentence_reviews sr WHERE sr.sentence_id=s.id AND sr.contributor_id=?)"
+            ]
+            params=[s['id'],s['id']]
+            if sentence_status!='all':
+                clauses.append("s.status=?")
+                params.append(sentence_status)
+            if source=='community':
+                clauses.append("s.source_type IN ('community','self','oral','book','other')")
+            elif source=='dictionary':
+                clauses.append("s.source_type='dictionary'")
+            if roman=='has_roman':
+                clauses.append("s.romanization IS NOT NULL AND trim(s.romanization)<>''")
+            elif roman=='no_roman':
+                clauses.append("(s.romanization IS NULL OR trim(s.romanization)='')")
+            where=' WHERE '+' AND '.join(clauses)
+            rows=db.execute(f'''SELECT s.id, s.id as sentence_id, s.tai_text_original, s.romanization, s.source_type, s.status as sentence_status, '' as vietnamese_text
+                FROM sentences s {where}
+                ORDER BY 
+                    CASE WHEN (SELECT count(*) FROM sentence_reviews sr WHERE sr.sentence_id=s.id) = 0 THEN 0 ELSE 1 END ASC,
+                    (SELECT count(*) FROM sentence_reviews sr WHERE sr.sentence_id=s.id) ASC,
+                    CASE WHEN s.romanization IS NULL OR trim(s.romanization)='' THEN 0 ELSE 1 END ASC,
+                    s.created_at DESC,
+                    s.id ASC
+                LIMIT ? OFFSET ?''', params+[limit,offset]).fetchall()
+            return {'items':batch_sentence_details(db,rows)}
+        else:
+            clauses=[
+                '(t.contributor_id IS NULL OR t.contributor_id<>?)',
+                'NOT EXISTS (SELECT 1 FROM translation_validations v JOIN translations tr ON tr.id=v.translation_id WHERE tr.sentence_id=t.sentence_id AND v.contributor_id=?)',
+                'NOT EXISTS (SELECT 1 FROM sentence_reviews sr WHERE sr.sentence_id=t.sentence_id AND sr.contributor_id=?)'
+            ]
+            params=[s['id'],s['id'],s['id']]
+            if status!='all':
+                clauses.append('t.status=?'); params.append(status)
+            if sentence_status!='all':
+                clauses.append('s.status=?'); params.append(sentence_status)
+            if source=='community':
+                clauses.append("(s.source_type IN ('community','self','oral','book','other') OR t.origin IN ('community','contributor','correction','admin_correction'))")
+            elif source=='dictionary':
+                clauses.append("(s.source_type='dictionary' OR t.origin='dictionary')")
+            if roman=='has_roman':
+                clauses.append("s.romanization IS NOT NULL AND trim(s.romanization)<>''")
+            elif roman=='no_roman':
+                clauses.append("(s.romanization IS NULL OR trim(s.romanization)='')")
+            where=' WHERE '+' AND '.join(clauses)
+            rows=db.execute(f'''SELECT t.id,t.sentence_id,t.vietnamese_text,t.status as translation_status,s.tai_text_original,s.romanization,s.source_type,s.status as sentence_status FROM translations t
+                JOIN sentences s ON s.id=t.sentence_id
+                {where}
+                ORDER BY 
+                    CASE WHEN (SELECT count(*) FROM translation_validations v2 WHERE v2.translation_id=t.id) = 0 THEN 0 ELSE 1 END ASC,
+                    (SELECT count(*) FROM translation_validations v2 WHERE v2.translation_id=t.id) ASC,
+                    CASE WHEN (SELECT count(*) FROM sentence_reviews sr WHERE sr.sentence_id=s.id) = 0 THEN 0 ELSE 1 END ASC,
+                    (SELECT count(*) FROM sentence_reviews sr WHERE sr.sentence_id=s.id) ASC,
+                    CASE WHEN s.romanization IS NULL OR trim(s.romanization)='' THEN 0 ELSE 1 END ASC,
+                    t.created_at DESC,
+                    t.id ASC
+                LIMIT ? OFFSET ?''',params+[limit,offset]).fetchall()
+            return {'items':batch_sentence_details(db,rows)}
 
 
 @app.post('/api/validations')
@@ -714,7 +776,7 @@ async def validate_translation(request:Request):
     s=submission(request,p)
     try:
         with database() as db:
-            t=approved(db,'translations',tid)
+            t=get_record(db,'translations',tid)
             if t['contributor_id']==s['id']: raise HTTPException(403,'Hãy kiểm tra bản dịch của người khác.')
             id=insert(db,'translation_validations',dict(translation_id=tid,validation_status=status,
                 suggested_translation=suggestion,contributor_id=s['id'],consent_version=CONSENT))
@@ -729,7 +791,7 @@ async def review_sentence(request:Request):
     s=submission(request,p)
     try:
         with database() as db:
-            approved(db,'sentences',sid)
+            get_record(db,'sentences',sid)
             id=insert(db,'sentence_reviews',dict(sentence_id=sid,naturalness=natural,contributor_id=s['id'],consent_version=CONSENT))
     except DB_INTEGRITY_ERRORS: raise HTTPException(409,'Bạn đã đánh giá câu này.')
     return {'id':id,'message':'Cảm ơn bạn đã đánh giá!'}
@@ -820,29 +882,38 @@ def word_meanings(tai:str='',roman:str=''):
 
 MODERATED={'sentences','translations','word_contributions','annotations','lexemes','word_senses','romanization_corrections','sentence_submissions','sentence_corrections'}
 READABLE=MODERATED|{'translation_validations','sentence_reviews','moderation_events'}
+def admin_filter(table, status, q):
+    if table not in READABLE or status not in ('all','pending','approved','rejected') or not isinstance(q,str) or len(q)>120:
+        raise HTTPException(422,'Bộ lọc không hợp lệ.')
+    clauses=[]; params=[]
+    if status!='all' and table in MODERATED: clauses.append('status=?'); params.append(status)
+    fields={'sentences':'tai_text_original','translations':'vietnamese_text','word_contributions':'vietnamese_meaning','lexemes':'tai_text_original','word_senses':'vietnamese_meaning','sentence_submissions':'romanization_final','romanization_corrections':'suggested_romanization','sentence_corrections':'suggested_tai_text'}
+    fields.update({'translation_validations':'suggested_translation','sentence_reviews':'naturalness','moderation_events':'entity_table','annotations':'annotation_data'})
+    if q:
+        q_pat='%'+q.strip()+'%'
+        if table=='word_contributions':
+            clauses.append('(coalesce(tai_text_final,tai_text_original) LIKE ? OR LOWER(coalesce(romanization_final,romanization_original)) LIKE LOWER(?) OR LOWER(vietnamese_meaning) LIKE LOWER(?))')
+            params.extend([q_pat,q_pat,q_pat])
+        elif table=='sentences':
+            clauses.append('(tai_text_original LIKE ? OR LOWER(romanization) LIKE LOWER(?))')
+            params.extend([q_pat,q_pat])
+        elif table=='sentence_corrections':
+            clauses.append('(suggested_tai_text LIKE ? OR LOWER(suggested_romanization) LIKE LOWER(?) OR LOWER(suggested_meaning) LIKE LOWER(?))')
+            params.extend([q_pat,q_pat,q_pat])
+        elif table in fields:
+            clauses.append(f'LOWER({fields[table]}) LIKE LOWER(?)'); params.append(q_pat)
+    where=' WHERE '+' AND '.join(clauses) if clauses else ''
+    return where, params
+
 @app.get('/api/admin/records')
 def admin_records(request:Request,table:str='sentences',status:str='pending',q:str='',offset:int=0):
     admin(request)
     if table not in READABLE or offset<0 or len(q)>120 or status not in ('all','pending','approved','rejected'): raise HTTPException(422,'Bộ lọc không hợp lệ.')
     with database() as db:
-        clauses=[]; params=[]
-        if status!='all' and table in MODERATED: clauses.append('status=?'); params.append(status)
-        fields={'sentences':'tai_text_original','translations':'vietnamese_text','word_contributions':'vietnamese_meaning','lexemes':'tai_text_original','word_senses':'vietnamese_meaning','sentence_submissions':'romanization_final','romanization_corrections':'suggested_romanization','sentence_corrections':'suggested_tai_text'}
-        if q:
-            q_pat='%'+q.strip()+'%'
-            if table=='word_contributions':
-                clauses.append('(coalesce(tai_text_final,tai_text_original) LIKE ? OR LOWER(coalesce(romanization_final,romanization_original)) LIKE LOWER(?) OR LOWER(vietnamese_meaning) LIKE LOWER(?))')
-                params.extend([q_pat,q_pat,q_pat])
-            elif table=='sentences':
-                clauses.append('(tai_text_original LIKE ? OR LOWER(romanization) LIKE LOWER(?))')
-                params.extend([q_pat,q_pat])
-            elif table=='sentence_corrections':
-                clauses.append('(suggested_tai_text LIKE ? OR LOWER(suggested_romanization) LIKE LOWER(?) OR LOWER(suggested_meaning) LIKE LOWER(?))')
-                params.extend([q_pat,q_pat,q_pat])
-            elif table in fields:
-                clauses.append(f'LOWER({fields[table]}) LIKE LOWER(?)'); params.append(q_pat)
-        where=' WHERE '+' AND '.join(clauses) if clauses else ''
+        where,params=admin_filter(table,status,q)
+        total=db.execute(f'SELECT count(*) FROM {table}{where}',params).fetchone()[0]
         raw_rows=db.execute(f'SELECT * FROM {table}{where} ORDER BY created_at DESC,id LIMIT 30 OFFSET ?',params+[offset]).fetchall()
+        raw_rows=[dict(r) for r in raw_rows]
         items=[]
         if raw_rows:
             if table=='translation_validations':
@@ -883,7 +954,60 @@ def admin_records(request:Request,table:str='sentences',status:str='pending',q:s
                     items.append(d)
             else:
                 items=[dict(r) for r in raw_rows]
-    return {'items':items}
+    return {'items':items,'total':total}
+
+
+def delete_admin_rows(db, table, ids):
+    # Remove dependent records first, within the caller's transaction.
+    marks=','.join('?' for _ in ids)
+    if table=='sentences':
+        translations=[r['id'] for r in db.execute(f'SELECT id FROM translations WHERE sentence_id IN ({marks})',ids).fetchall()]
+        if translations: delete_admin_rows(db,'translations',translations)
+        for child in ('word_sense_examples','sentence_reviews','annotations','sentence_submissions','romanization_corrections','sentence_corrections'):
+            db.execute(f'DELETE FROM {child} WHERE sentence_id IN ({marks})',ids)
+    elif table=='translations':
+        for child in ('translation_validations','word_sense_examples'):
+            db.execute(f'DELETE FROM {child} WHERE translation_id IN ({marks})',ids)
+    elif table=='lexemes':
+        senses=[r['id'] for r in db.execute(f'SELECT id FROM word_senses WHERE lexeme_id IN ({marks})',ids).fetchall()]
+        if senses: delete_admin_rows(db,'word_senses',senses)
+        for child in ('lexeme_search_keys','orthography_analyses'):
+            db.execute(f'DELETE FROM {child} WHERE lexeme_id IN ({marks})',ids)
+    elif table=='word_senses':
+        db.execute(f'DELETE FROM word_sense_examples WHERE word_sense_id IN ({marks})',ids)
+    db.execute(f'DELETE FROM {table} WHERE id IN ({marks})',ids)
+
+
+@app.post('/api/admin/delete')
+async def delete_admin_records(request:Request):
+    actor=admin(request); p=await payload(request)
+    table=p.get('table'); status=p.get('status','all'); q=p.get('q','')
+    if not isinstance(table,str) or table not in READABLE-{'moderation_events'}:
+        raise HTTPException(422,'Loại dữ liệu không được phép xóa.')
+    where,params=admin_filter(table,status,q)
+    if p.get('scope')=='selected':
+        ids=p.get('ids')
+        if not isinstance(ids,list) or not 1<=len(ids)<=30 or any(not isinstance(i,str) or not i or len(i)>40 for i in ids):
+            raise HTTPException(422,'Chọn từ 1 đến 30 bản ghi trên trang.')
+        where+=(' AND ' if where else ' WHERE ')+ 'id IN ('+','.join('?' for _ in ids)+')'
+        params+=ids
+    elif p.get('scope')!='filtered':
+        raise HTTPException(422,'Phạm vi xóa không hợp lệ.')
+    expected=p.get('expected_count')
+    if type(expected) is not int or expected<1:
+        raise HTTPException(422,'Số lượng xác nhận không hợp lệ.')
+    with database() as db:
+        lock=' FOR UPDATE' if DB_BACKEND=='supabase' else ''
+        if DB_BACKEND=='sqlite': db.execute('BEGIN IMMEDIATE')
+        rows=[dict(r) for r in db.execute(f'SELECT * FROM {table}{where}'+lock,params).fetchall()]
+        if len(rows)!=expected:
+            raise HTTPException(409,'Dữ liệu đã thay đổi. Hãy tải lại và chọn lại trước khi xóa.')
+        for offset in range(0,len(rows),200):
+            batch=rows[offset:offset+200]
+            delete_admin_rows(db,table,[r['id'] for r in batch])
+            for row in batch:
+                insert(db,'moderation_events',dict(entity_table=table,entity_id=row['id'],previous_status=row.get('status') or 'untracked',new_status='deleted',admin_id=actor['id']))
+    return {'ok':True,'deleted':len(rows)}
 
 
 @app.post('/api/admin/words/edit')
@@ -891,30 +1015,74 @@ async def edit_word_contribution(request:Request):
     s=admin(request); p=await payload(request)
     wid=text(p,'id',True,40)
     tai=text(p,'tai_text',True,120)
-    roman=text(p,'romanization',False,120)
+    roman=text(p,'romanization',False,120) or ''
     meaning=text(p,'vietnamese_meaning',True,5000)
     status=p.get('status','approved')
     if status not in ('approved','rejected','pending'): status='approved'
     with database() as db:
         old=db.execute('SELECT * FROM word_contributions WHERE id=?',(wid,)).fetchone()
         if not old: raise HTTPException(404,'Không tìm thấy từ đóng góp.')
-        db.execute('UPDATE word_contributions SET status=? WHERE id=?',(status,wid))
+        old_dict=dict(old)
+        old_tai=old_dict.get('tai_text_final') or old_dict.get('tai_text_original') or ''
+        old_meaning=old_dict.get('vietnamese_meaning') or ''
+
+        cons=consistency(tai,roman)
+        analysis=engine.parse_tai_word(tai) if tai else {}
+        db.execute('''UPDATE word_contributions
+            SET tai_text_original=?, tai_text_final=?,
+                romanization_original=?, romanization_final=?,
+                vietnamese_meaning=?, status=?, consistency_status=?, analysis=?
+            WHERE id=?''',
+            (tai, tai, roman, roman, meaning, status, cons, json.dumps(analysis, ensure_ascii=False), wid))
+
         if status=='approved':
-            lex=db.execute('SELECT id FROM lexemes WHERE tai_text_original=? LIMIT 1',(tai,)).fetchone()
-            if lex:
-                lex_id=lex['id']
-                if roman: db.execute('UPDATE lexemes SET romanization=coalesce(romanization,?),status=? WHERE id=?',(roman,'approved',lex_id))
+            old_sense=None; old_lex=None
+            if old_tai:
+                old_lex=db.execute('SELECT id FROM lexemes WHERE tai_text_original=?',(old_tai,)).fetchone()
+                if old_lex:
+                    old_sense=db.execute('SELECT id, lexeme_id FROM word_senses WHERE lexeme_id=? AND vietnamese_meaning=?',(old_lex['id'],old_meaning)).fetchone()
+
+            if old_sense:
+                if old_tai == tai:
+                    target_lex_id = old_lex['id']
+                    db.execute('UPDATE word_senses SET vietnamese_meaning=?, status=? WHERE id=?',(meaning,'approved',old_sense['id']))
+                    if roman:
+                        db.execute('UPDATE lexemes SET romanization=?, status=? WHERE id=?',(roman,'approved',target_lex_id))
+                else:
+                    target_lex=db.execute('SELECT id FROM lexemes WHERE tai_text_original=?',(tai,)).fetchone()
+                    if target_lex:
+                        target_lex_id=target_lex['id']
+                        if roman: db.execute('UPDATE lexemes SET romanization=coalesce(romanization,?),status=? WHERE id=?',(roman,'approved',target_lex_id))
+                    else:
+                        target_lex_id=insert(db,'lexemes',dict(tai_text_original=tai,romanization=roman,status='approved',source_type='community'))
+                    db.execute('UPDATE word_senses SET lexeme_id=?, vietnamese_meaning=?, status=? WHERE id=?',(target_lex_id,meaning,'approved',old_sense['id']))
+                    rem=db.execute('SELECT count(*) FROM word_senses WHERE lexeme_id=?',(old_lex['id'],)).fetchone()[0]
+                    if rem==0 and old_lex['id']!=target_lex_id:
+                        db.execute('DELETE FROM lexeme_search_keys WHERE lexeme_id=?',(old_lex['id'],))
+                        db.execute("DELETE FROM lexemes WHERE id=? AND source_type='community'",(old_lex['id'],))
             else:
-                lex_id=insert(db,'lexemes',dict(tai_text_original=tai,romanization=roman,status='approved',source_type='community'))
-            existing_sense=db.execute('SELECT id FROM word_senses WHERE lexeme_id=? AND vietnamese_meaning=? LIMIT 1',(lex_id,meaning)).fetchone()
-            if not existing_sense:
-                insert(db,'word_senses',dict(lexeme_id=lex_id,vietnamese_meaning=meaning,status='approved'))
+                target_lex=db.execute('SELECT id FROM lexemes WHERE tai_text_original=?',(tai,)).fetchone()
+                if target_lex:
+                    target_lex_id=target_lex['id']
+                    if roman: db.execute('UPDATE lexemes SET romanization=coalesce(romanization,?),status=? WHERE id=?',(roman,'approved',target_lex_id))
+                else:
+                    target_lex_id=insert(db,'lexemes',dict(tai_text_original=tai,romanization=roman,status='approved',source_type='community'))
+                existing_sense=db.execute('SELECT id FROM word_senses WHERE lexeme_id=? AND vietnamese_meaning=?',(target_lex_id,meaning)).fetchone()
+                if not existing_sense:
+                    insert(db,'word_senses',dict(lexeme_id=target_lex_id,vietnamese_meaning=meaning,status='approved'))
+
             if roman:
                 keys=engine.canonical_keys(roman)
                 for k in keys:
-                    db.execute('INSERT OR IGNORE INTO lexeme_search_keys (lexeme_id,canonical_key,rule_version) VALUES (?,?,?)',(lex_id,k,engine.version))
-        insert(db,'moderation_events',dict(entity_table='word_contributions',entity_id=wid,previous_status=old['status'],new_status=status,admin_id=s['id']))
-    return {'ok':True,'message':'Đã cập nhật từ đóng góp thành công!'}
+                    db.execute('INSERT OR IGNORE INTO lexeme_search_keys (lexeme_id,canonical_key,rule_version) VALUES (?,?,?)',(target_lex_id,k,engine.version))
+        elif old_dict.get('status')=='approved':
+            if old_tai:
+                lex=db.execute('SELECT id FROM lexemes WHERE tai_text_original=?',(old_tai,)).fetchone()
+                if lex:
+                    db.execute('UPDATE word_senses SET status=? WHERE lexeme_id=? AND vietnamese_meaning=?',(status,lex['id'],old_meaning))
+
+        insert(db,'moderation_events',dict(entity_table='word_contributions',entity_id=wid,previous_status=old_dict['status'],new_status=status,admin_id=s['id']))
+    return {'ok':True,'message':'Đã cập nhật từ đóng góp thành công (ghi đè bản cũ)!'}
 
 
 @app.post('/api/admin/sentence-corrections/edit')
@@ -923,7 +1091,7 @@ async def edit_sentence_correction(request:Request):
     cid=text(p,'id',True,40)
     tai=text(p,'suggested_tai_text',True,5000)
     roman=text(p,'suggested_romanization',True,5000)
-    meaning=text(p,'suggested_meaning',False,5000) or ''
+    meaning=text(p,'suggested_meaning',True,5000)
     status=p.get('status','approved')
     if status not in ('approved','rejected','pending'): status='approved'
     with database() as db:
@@ -931,11 +1099,17 @@ async def edit_sentence_correction(request:Request):
         if not old: raise HTTPException(404,'Không tìm thấy bản ghi sửa câu.')
         db.execute('UPDATE sentence_corrections SET suggested_tai_text=?, suggested_romanization=?, suggested_meaning=?, status=? WHERE id=?',
                    (tai,roman,meaning,status,cid))
-        if status=='approved' and meaning and meaning.strip():
-            sid=old['sentence_id']
-            insert(db,'translations',dict(sentence_id=sid,vietnamese_text=meaning.strip(),origin='correction',contributor_id=old.get('contributor_id'),status='approved'))
+        sid=old['sentence_id']
+        if status=='approved':
+            db.execute("UPDATE sentences SET tai_text_original=?, romanization=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (tai, roman, sid))
+            if meaning and meaning.strip():
+                existing_tr=db.execute("SELECT id FROM translations WHERE sentence_id=? ORDER BY (status='approved') DESC, created_at LIMIT 1", (sid,)).fetchone()
+                if existing_tr:
+                    db.execute("UPDATE translations SET vietnamese_text=?, status='approved', updated_at=CURRENT_TIMESTAMP WHERE id=?", (meaning.strip(), existing_tr['id']))
+                else:
+                    insert(db,'translations',dict(sentence_id=sid,vietnamese_text=meaning.strip(),origin='correction',contributor_id=old.get('contributor_id'),status='approved'))
         insert(db,'moderation_events',dict(entity_table='sentence_corrections',entity_id=cid,previous_status=old['status'],new_status=status,admin_id=s['id']))
-    return {'ok':True,'message':'Đã cập nhật và duyệt câu sửa thành công!'}
+    return {'ok':True,'message':'Đã cập nhật và duyệt câu sửa thành công (ghi đè bản cũ)!'}
 
 
 @app.post('/api/admin/moderate')
@@ -955,8 +1129,15 @@ async def moderate(request:Request):
         if table=='sentence_corrections' and status=='approved':
             sc=dict(db.execute('SELECT * FROM sentence_corrections WHERE id=?',(id,)).fetchone())
             sid=sc['sentence_id']
+            if sc.get('suggested_tai_text'):
+                db.execute("UPDATE sentences SET tai_text_original=?, romanization=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                           (sc['suggested_tai_text'], sc.get('suggested_romanization') or '', sid))
             if sc.get('suggested_meaning') and sc['suggested_meaning'].strip():
-                insert(db,'translations',dict(sentence_id=sid,vietnamese_text=sc['suggested_meaning'].strip(),origin='correction',contributor_id=sc.get('contributor_id'),status='approved'))
+                existing_tr=db.execute("SELECT id FROM translations WHERE sentence_id=? ORDER BY (status='approved') DESC, created_at LIMIT 1", (sid,)).fetchone()
+                if existing_tr:
+                    db.execute("UPDATE translations SET vietnamese_text=?, status='approved', updated_at=CURRENT_TIMESTAMP WHERE id=?", (sc['suggested_meaning'].strip(), existing_tr['id']))
+                else:
+                    insert(db,'translations',dict(sentence_id=sid,vietnamese_text=sc['suggested_meaning'].strip(),origin='correction',contributor_id=sc.get('contributor_id'),status='approved'))
         if table=='word_contributions' and status=='approved':
             wc=dict(db.execute('SELECT * FROM word_contributions WHERE id=?',(id,)).fetchone())
             tai_text=wc.get('tai_text_final') or wc.get('tai_text_original')

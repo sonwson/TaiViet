@@ -542,11 +542,32 @@
           <button id="btn-export-csv" class="secondary" type="button">⬇ Tải CSV</button>
         </div>
       </div>
+      <div id="admin-selection" class="admin-selection" hidden>
+        <div class="admin-selection-info">
+          <label class="admin-row-select"><input id="admin-select-page" type="checkbox"> Chọn cả trang</label>
+          <span id="admin-selected-count" role="status" aria-live="polite"></span>
+        </div>
+        <div class="admin-selection-actions">
+          <button id="admin-select-filtered" class="secondary" type="button">Chọn toàn bộ kết quả lọc</button>
+          <button id="admin-clear-selection" class="secondary" type="button" disabled>Bỏ chọn</button>
+          <button id="admin-delete-selected" class="btn-danger" type="button" disabled>Xóa đã chọn</button>
+        </div>
+        <small>Chọn cả trang chỉ áp dụng cho tối đa 30 mục đang hiển thị. Đổi bộ lọc hoặc trang sẽ bỏ lựa chọn.</small>
+      </div>
       <div id="admin-results"></div>
       <button id="admin-more" class="secondary">Trang tiếp</button>
     </div>
   </section>
 </main>
+<dialog id="admin-delete-dialog" class="admin-delete-dialog" aria-labelledby="admin-delete-title" aria-describedby="admin-delete-summary admin-delete-warning">
+  <h2 id="admin-delete-title">Xác nhận xóa dữ liệu</h2>
+  <p id="admin-delete-summary"></p>
+  <p id="admin-delete-warning" class="admin-delete-warning"></p>
+  <div class="admin-selection-actions">
+    <button id="admin-delete-cancel" class="secondary" type="button">Hủy, giữ dữ liệu</button>
+    <button id="admin-delete-confirm" class="btn-danger" type="button">Xóa vĩnh viễn</button>
+  </div>
+</dialog>
 
 <!-- ===== Bottom Navigation (mobile) ===== -->
 <nav class="bottom-nav" aria-label="Chức năng chính">

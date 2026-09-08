@@ -71,6 +71,7 @@ CREATE POLICY own_read ON public.word_contributions FOR SELECT TO authenticated 
 -- Engine snapshots must be produced by trusted backend, so browser insert is revoked.
 REVOKE INSERT ON public.word_contributions FROM authenticated;
 
+
 CREATE OR REPLACE FUNCTION private.preserve_original() RETURNS trigger
 LANGUAGE plpgsql SET search_path='' AS $$
 BEGIN
@@ -80,10 +81,12 @@ BEGIN
  RETURN NEW;
 END $$;
 DO $$ DECLARE t TEXT; BEGIN
- FOREACH t IN ARRAY ARRAY['source_records','lexemes','word_senses','orthography_analyses','sentences','translations',
- 'word_sense_examples','translation_validations','sentence_reviews','annotations','word_contributions','moderation_events','sentence_submissions','romanization_corrections'] LOOP
+ FOREACH t IN ARRAY ARRAY['source_records','orthography_analyses','word_sense_examples','translation_validations','sentence_reviews','annotations','moderation_events','sentence_submissions','romanization_corrections'] LOOP
   EXECUTE format('DROP TRIGGER IF EXISTS preserve_original ON public.%I',t);
   EXECUTE format('CREATE TRIGGER preserve_original BEFORE UPDATE ON public.%I FOR EACH ROW EXECUTE FUNCTION private.preserve_original()',t);
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['word_contributions','sentences','translations','lexemes','word_senses'] LOOP
+  EXECUTE format('DROP TRIGGER IF EXISTS preserve_original ON public.%I',t);
  END LOOP;
 END $$;
 
