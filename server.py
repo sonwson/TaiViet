@@ -77,7 +77,10 @@ if DB_BACKEND=='supabase' and SUPABASE_DB_URL:
         import psycopg2
         from psycopg2 import pool
         from psycopg2.extras import DictCursor
-        pg_pool=pool.ThreadedConnectionPool(1,10,SUPABASE_DB_URL)
+        pg_pool=pool.ThreadedConnectionPool(
+            1,10,SUPABASE_DB_URL,connect_timeout=10,
+            keepalives=1,keepalives_idle=30,keepalives_interval=10,
+            keepalives_count=3,tcp_user_timeout=15000)
         DB_INTEGRITY_ERRORS=(sqlite3.IntegrityError,psycopg2.IntegrityError)
         print(f"[*] Chế độ CSDL: Supabase PostgreSQL (Cloud)")
     except Exception as e:
@@ -136,20 +139,41 @@ class PgConnectionWrapper:
     def close(self): self._cursor.close()
 
 
+def checkout_pg_connection():
+    # Probe before starting application work: idle pooled sockets may have expired.
+    for attempt in range(2):
+        conn=pg_pool.getconn()
+        wrapper=None
+        try:
+            wrapper=PgConnectionWrapper(conn)
+            wrapper.execute('SELECT 1').fetchone()
+            wrapper.rollback()
+            return conn,wrapper
+        except Exception:
+            if wrapper is not None:
+                try: wrapper.close()
+                except Exception: pass
+            pg_pool.putconn(conn,close=True)
+            if attempt==1: raise
+
+
 @contextmanager
 def database():
     if DB_BACKEND=='supabase' and pg_pool:
-        conn=pg_pool.getconn()
-        wrapper=PgConnectionWrapper(conn)
+        conn,wrapper=checkout_pg_connection()
+        discard=False
         try:
             yield wrapper
             wrapper.commit()
         except Exception:
-            wrapper.rollback()
+            # Never replay a transaction: a failed commit may already have succeeded.
+            try: wrapper.rollback()
+            except Exception: discard=True
             raise
         finally:
-            wrapper.close()
-            pg_pool.putconn(conn)
+            try: wrapper.close()
+            except Exception: discard=True
+            pg_pool.putconn(conn,close=discard or bool(conn.closed))
     else:
         db=sqlite3.connect(DB_PATH); db.row_factory=sqlite3.Row; db.execute('PRAGMA foreign_keys=ON')
         db.create_function('LOWER', 1, lambda s: s.lower() if s is not None else None)
@@ -485,7 +509,7 @@ def batch_sentence_details(db,rows):
     sent_corr_rows=db.execute(f"SELECT id, sentence_id, suggested_tai_text, suggested_romanization FROM sentence_corrections WHERE sentence_id IN ({placeholders}) AND status='approved' ORDER BY created_at DESC", sids).fetchall()
     sent_corr_map={}
     for scr in sent_corr_rows:
-        if scr['sentence_id'] not in sent_corr_map: sent_corr_map[scr['sentence_id']]=scr
+        if scr['sentence_id'] not in sent_corr_map: sent_corr_map[scr['sentence_id']]=dict(scr)
 
     corr_rows=db.execute(f"SELECT id, sentence_id, suggested_romanization FROM romanization_corrections WHERE sentence_id IN ({placeholders}) AND status='approved' ORDER BY created_at DESC", sids).fetchall()
     corr_map={}
