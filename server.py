@@ -740,27 +740,48 @@ def dictionary(q:str='',offset:int=0):
     if len(q)>120 or offset<0: raise HTTPException(422,'Bộ lọc không hợp lệ.')
     q_clean=q.strip()
     with database() as db:
+        keys=engine.canonical_keys(q_clean) if q_clean else []
+        placeholders=','.join('?' for _ in keys) or 'NULL'
         pattern='%'+q_clean+'%'
-        contrib_rows=db.execute('''SELECT wc.id,
-            coalesce(wc.tai_text_final, wc.tai_text_original) as tai_text_original,
-            coalesce(wc.romanization_final, wc.romanization_original) as romanization,
-            wc.id as sense_id, wc.vietnamese_meaning, 'Từ đóng góp' as part_of_speech, 'contribution' as kind
-        FROM word_contributions wc
-        WHERE wc.status='approved'
-        AND (coalesce(wc.tai_text_final, wc.tai_text_original) LIKE ?
-             OR LOWER(coalesce(wc.romanization_final, wc.romanization_original)) LIKE LOWER(?)
-             OR LOWER(wc.vietnamese_meaning) LIKE LOWER(?))
-        ORDER BY wc.created_at DESC, wc.id DESC LIMIT 21 OFFSET ?''',
-        (pattern,pattern,pattern,offset)).fetchall()
 
+        lex_rows=db.execute('''SELECT l.id,l.tai_text_original,l.romanization,w.id sense_id,w.vietnamese_meaning,w.part_of_speech,'word' as kind
+        FROM lexemes l JOIN word_senses w ON w.lexeme_id=l.id WHERE l.status='approved' AND w.status='approved'
+        AND (l.tai_text_original LIKE ? OR LOWER(l.romanization) LIKE LOWER(?) OR LOWER(w.vietnamese_meaning) LIKE LOWER(?) OR EXISTS
+        (SELECT 1 FROM lexeme_search_keys sk WHERE sk.lexeme_id=l.id AND sk.rule_version=? AND sk.canonical_key IN ('''+placeholders+'''))) ORDER BY l.id,w.id LIMIT 25 OFFSET ?''',
+        (pattern,pattern,pattern,engine.version,*keys,offset)).fetchall()
+
+        contrib_rows=[]
+        if offset==0 or len(lex_rows)<25:
+            contrib_rows=db.execute('''SELECT wc.id,
+                coalesce(wc.tai_text_final, wc.tai_text_original) as tai_text_original,
+                coalesce(wc.romanization_final, wc.romanization_original) as romanization,
+                wc.id as sense_id, wc.vietnamese_meaning, 'Từ đóng góp' as part_of_speech, 'contribution' as kind
+            FROM word_contributions wc
+            WHERE wc.status='approved'
+            AND (coalesce(wc.tai_text_final, wc.tai_text_original) LIKE ?
+                 OR LOWER(coalesce(wc.romanization_final, wc.romanization_original)) LIKE LOWER(?)
+                 OR LOWER(wc.vietnamese_meaning) LIKE LOWER(?))
+            ORDER BY wc.created_at DESC, wc.id DESC LIMIT 21 OFFSET ?''',
+            (pattern,pattern,pattern,offset)).fetchall()
+
+        seen=set()
         all_items=[]
+        for r in lex_rows:
+            d=dict(r)
+            seen.add(((d.get('tai_text_original') or '').strip(), (d.get('vietnamese_meaning') or '').strip().lower()))
+            all_items.append(d)
+
         for r in contrib_rows:
-            item=dict(r)
-            if not (item.get('tai_text_original') and item['tai_text_original'].strip()) and item.get('romanization'):
-                gen=engine.romanization_to_tai(item['romanization'].strip())
+            d=dict(r)
+            if not (d.get('tai_text_original') and d['tai_text_original'].strip()) and d.get('romanization'):
+                gen=engine.romanization_to_tai(d['romanization'].strip())
                 cands=gen.get('candidates',[]) or gen.get('dictionary_candidates',[])
-                if cands: item['tai_text_original']=cands[0]['tai']
-            all_items.append(item)
+                if cands: d['tai_text_original']=cands[0]['tai']
+            key=((d.get('tai_text_original') or '').strip(), (d.get('vietnamese_meaning') or '').strip().lower())
+            if key not in seen:
+                seen.add(key)
+                all_items.append(d)
+
     return {'items':all_items[:20], 'has_more': len(all_items) > 20}
 
 
