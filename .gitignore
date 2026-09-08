@@ -30,8 +30,10 @@ package.json
 # Kiểm thử, đánh giá & file nháp (Không cần cho deploy)
 # ===================================================
 tests/
+checks/
 test_*.py
 *_test.py
+*_check.py
 scripts/test_*
 scripts/evaluate_*
 scratch/
@@ -46,6 +48,7 @@ promt*.md
 REPORT*.md
 *.docx
 requirements-training.txt
+docs/
 
 # ===================================================
 # Dữ liệu thô ngoại tuyến (Raw data không dùng khi chạy app)

@@ -1,5 +1,25 @@
 # Dịch Chữ Thái Việt (Tai Viet Translation & Corpus Platform)
 
+## Tài khoản cộng đồng và Resend
+
+Thành viên có thể đăng ký email/mật khẩu, xem từ và câu đã đóng góp theo trạng thái,
+và tham gia bảng xếp hạng tính trên đóng góp đã duyệt. Tra cứu chỉ hiển thị từ đóng
+góp đã duyệt. Các bảng tài khoản được tạo bổ sung khi backend khởi động; dùng
+Supabase trên Render để giữ dữ liệu qua các lần triển khai.
+Khi cấu hình Supabase nhưng không kết nối được, backend dừng khởi động để tránh
+lưu tài khoản sang SQLite tạm thời; hãy kiểm tra kết nối rồi khởi động lại.
+
+Để bật email quên mật khẩu, cấu hình trong Render Environment:
+
+- `RESEND_API_KEY`: khóa gửi email Resend, chỉ giữ phía server.
+- `RESEND_FROM`: địa chỉ gửi thuộc domain đã xác minh, ví dụ `Tai Việt <taikhoan@example.com>`.
+- `PUBLIC_BASE_URL`: URL HTTPS chính thức, ví dụ `https://taiviet.onrender.com`.
+
+Sau khi lưu cấu hình, redeploy. Liên kết đặt lại mật khẩu dùng một lần, hết hạn
+sau 30 phút và thu hồi các phiên đăng nhập cũ khi đổi mật khẩu thành công.
+Nếu chưa cấu hình Resend, đăng ký/đăng nhập vẫn dùng được; khôi phục mật khẩu
+thông báo chưa sẵn sàng. Không đưa API key vào mã frontend hoặc Git.
+
 Hệ thống hỗ trợ học tập, tra cứu và số hóa ngôn ngữ **chữ Thái Việt** (Tai Dam / Tai Don). Ứng dụng tích hợp bộ quy tắc chuyển đổi ngữ âm – văn tự Thái Việt hai chiều, kết hợp nền tảng cộng đồng đóng góp dữ liệu và quản trị kiểm duyệt.
 
 ---

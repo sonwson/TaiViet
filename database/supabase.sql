@@ -115,8 +115,41 @@ CREATE TABLE IF NOT EXISTS romanization_corrections (
  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_romanization_corrections_sentence ON romanization_corrections(sentence_id,status);
+CREATE TABLE IF NOT EXISTS sentence_corrections (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(), sentence_id UUID NOT NULL REFERENCES sentences(id), base_tai_text TEXT,
+ suggested_tai_text TEXT NOT NULL CHECK(length(trim(suggested_tai_text)) BETWEEN 1 AND 5000),
+ suggested_romanization TEXT NOT NULL CHECK(length(trim(suggested_romanization)) BETWEEN 1 AND 5000),
+ suggested_meaning TEXT DEFAULT '',
+ contributor_id UUID NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sentence_corrections_sentence ON sentence_corrections(sentence_id,status);
+
+
+CREATE TABLE IF NOT EXISTS user_accounts (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(), email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+ display_name TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS account_sessions (
+ token_hash TEXT PRIMARY KEY, user_id UUID NOT NULL REFERENCES user_accounts(id),
+ expires_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_account_sessions_user ON account_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_account_sessions_expiry ON account_sessions(expires_at);
+CREATE TABLE IF NOT EXISTS password_resets (
+ token_hash TEXT PRIMARY KEY, user_id UUID NOT NULL REFERENCES user_accounts(id),
+ expires_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id);
+CREATE INDEX IF NOT EXISTS idx_password_resets_expiry ON password_resets(expires_at);
+CREATE INDEX IF NOT EXISTS idx_word_contributions_owner ON word_contributions(contributor_id,status);
+CREATE INDEX IF NOT EXISTS idx_sentences_owner ON sentences(contributor_id,status);
 
 -- Supabase: run as postgres / migration owner, never from a browser.
+ALTER TABLE public.user_accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.account_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.password_resets ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.user_accounts,public.account_sessions,public.password_resets FROM PUBLIC,anon,authenticated;
 CREATE SCHEMA IF NOT EXISTS private;
 REVOKE ALL ON SCHEMA private FROM PUBLIC;
 GRANT USAGE ON SCHEMA private TO authenticated;

@@ -1,4 +1,8 @@
 -- Supabase: run as postgres / migration owner, never from a browser.
+ALTER TABLE public.user_accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.account_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.password_resets ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.user_accounts,public.account_sessions,public.password_resets FROM PUBLIC,anon,authenticated;
 CREATE SCHEMA IF NOT EXISTS private;
 REVOKE ALL ON SCHEMA private FROM PUBLIC;
 GRANT USAGE ON SCHEMA private TO authenticated;

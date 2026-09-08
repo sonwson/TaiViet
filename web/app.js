@@ -1,12 +1,13 @@
+import { accountUI } from '/static/accounts.mjs';
 import { contribution } from '/static/contribution.mjs';
 const $ = id => document.getElementById(id);
 const hamburger=document.querySelector('.hamburger');const mainNav=$('main-nav');
 if(hamburger)hamburger.addEventListener('click',()=>{const open=mainNav.classList.toggle('open');hamburger.setAttribute('aria-expanded',String(open));hamburger.textContent=open?'✕':'☰';});
 const state={session:null,sentence:null,review:null,sentenceOffset:0,reviewOffset:0,dictOffset:0,adminOffset:0,transFilters:{status:'approved',source:'all',meaning:'all',roman:'all'},reviewFilters:{status:'approved',source:'all',roman:'all'}};
 function notice(message,error=false){$('notice').textContent=message;$('notice').classList.toggle('error',error);}
-async function api(path,body){const jwt=localStorage.getItem('tai_admin_token');const headers={...(body===undefined?{}:{'Content-Type':'application/json'}),...(jwt?{'Authorization':'Bearer '+jwt}:{})};const response=await fetch('/api/'+path,{credentials:'same-origin',...(body===undefined?{headers}:{method:'POST',headers,body:JSON.stringify(body)})});const data=await response.json();if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:'Dữ liệu không hợp lệ.');return data;}
+async function api(path,body){const jwt=localStorage.getItem('tai_admin_token');const headers={...(body===undefined?{}:{'Content-Type':'application/json'}),...(jwt?{'Authorization':'Bearer '+jwt}:{})};const response=await fetch('/api/'+path,{credentials:'same-origin',...(body===undefined?{headers}:{method:'POST',headers,body:JSON.stringify(body)})});const data=await response.json().catch(()=>({detail:'Máy chủ đang gặp sự cố. Vui lòng thử lại sau.'}));if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:'Dữ liệu không hợp lệ.');return data;}
 const node=(tag,text,cls)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;};
-async function refreshSession(){state.session=await api('session');const card=$('admin-login-card')||$('admin-login');if(card)card.hidden=state.session.admin;$('admin-workspace').hidden=!state.session.admin;}
+async function refreshSession(){state.session=await api('session');const card=$('admin-login-card')||$('admin-login');if(card)card.hidden=state.session.admin;$('admin-workspace').hidden=!state.session.admin;memberUI.sessionChanged();}
 function formData(form){return Object.fromEntries(new FormData(form));}
 function wireForm(id,path,extend=()=>({}),after=()=>{}){
   $(id).addEventListener('submit',async event=>{
@@ -22,7 +23,7 @@ function wireForm(id,path,extend=()=>({}),after=()=>{}){
   });
 }
 document.querySelectorAll('nav button').forEach(button=>button.addEventListener('click',()=>openTab(button.dataset.tab)));
-async function openTab(id){if(mainNav){mainNav.classList.remove('open');if(hamburger){hamburger.setAttribute('aria-expanded','false');hamburger.textContent='☰';}}document.querySelectorAll('.panel').forEach(p=>p.hidden=p.id!==id);document.querySelectorAll('nav button').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.tab===id)));history.replaceState(null,'','#'+id);notice('');try{if(id==='translate'&&!state.sentence)await loadSentence();if(id==='review'&&!state.review)await loadReview();if(id==='dictionary')await searchDictionary();if(id==='admin'&&state.session?.admin)await loadAdmin();}catch(e){notice(e.message,true);}}
+async function openTab(id){if(mainNav){mainNav.classList.remove('open');if(hamburger){hamburger.setAttribute('aria-expanded','false');hamburger.textContent='☰';}}document.querySelectorAll('.panel').forEach(p=>p.hidden=p.id!==id);document.querySelectorAll('nav button').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.tab===id)));history.replaceState(null,'','#'+id);notice('');try{if(id==='translate'&&!state.sentence)await loadSentence();if(id==='review'&&!state.review)await loadReview();if(id==='dictionary')await searchDictionary();if(id==='admin'&&state.session?.admin)await loadAdmin();await memberUI.open(id);}catch(e){notice(e.message,true);}}
 const wordContribution=contribution({prefix:'word',form:$('word-form'),sentence:false,api,node,notice});
 const sentenceContribution=contribution({prefix:'sentence',form:$('sentence-form'),sentence:true,api,node,notice});
 wireForm('word-form','words',()=>wordContribution.payload(),()=>wordContribution.reset());
@@ -94,7 +95,7 @@ function sentenceCard(prompt,row,review=false){
 
   const fullCorrection=node('details');
   const isAdmin=Boolean(state.session?.admin);
-  fullCorrection.append(node('summary', isAdmin ? '⚙ Sửa câu gốc, phiên âm & nghĩa (Admin)' : 'Đề xuất sửa câu gốc (kèm phiên âm & nghĩa)'));
+  fullCorrection.append(node('summary', isAdmin ? 'Sửa câu gốc, phiên âm & nghĩa (Admin)' : 'Đề xuất sửa câu gốc (kèm phiên âm & nghĩa)'));
   const fcBox=node('div',undefined,'correction-box');
   const taiLabel=node('label','Câu chữ Tai:');
   const taiInput=node('textarea',undefined,'tai');
@@ -201,8 +202,8 @@ $('review-filter-apply')?.addEventListener('click',()=>{
 });
 $('validation-status').addEventListener('change',()=>{const need=$('validation-status').value==='needs_correction';$('correction-label').hidden=!need;$('review-form').elements.suggested_translation.required=need;});
 wireForm('review-form','validations',()=>({translation_id:state.review?.id}),()=>{state.reviewOffset=0;$('correction-label').hidden=true;$('review-form').elements.suggested_translation.required=false;loadReview().catch(e=>notice(e.message,true));});
-async function searchDictionary(){const q=$('search-form').elements.q.value;const d=await api('dictionary?q='+encodeURIComponent(q)+'&offset='+state.dictOffset);$('dictionary-results').replaceChildren();for(const r of d.items){const article=node('article',undefined,'record');const h3=node('h3',r.tai_text_original,'tai');if(r.kind==='sentence'){const badge=node('span','Câu đã duyệt','dict-badge dict-badge-sentence');h3.append(badge);}else if(r.kind==='contribution'){const badge=node('span','Từ đóng góp','dict-badge dict-badge-contribution');h3.append(badge);}article.append(h3,node('p',r.romanization||'Chưa có phiên âm'),node('p',(r.part_of_speech?r.part_of_speech+' · ':'')+r.vietnamese_meaning));$('dictionary-results').append(article);}if(!d.items.length)$('dictionary-results').append(node('p','Không có kết quả.'));$('more-dictionary').disabled=d.items.length<20;}
-$('search-form').addEventListener('submit',e=>{e.preventDefault();state.dictOffset=0;searchDictionary().catch(e=>notice(e.message,true));});$('more-dictionary').addEventListener('click',()=>{state.dictOffset+=30;searchDictionary().catch(e=>notice(e.message,true));});
+async function searchDictionary(){const q=$('search-form').elements.q.value;const d=await api('dictionary?q='+encodeURIComponent(q)+'&offset='+state.dictOffset);$('dictionary-results').replaceChildren();for(const r of d.items){const article=node('article',undefined,'record');const h3=node('h3',r.tai_text_original,'tai');if(r.kind==='sentence'){const badge=node('span','Câu đã duyệt','dict-badge dict-badge-sentence');h3.append(badge);}else if(r.kind==='contribution'){const badge=node('span','Từ đóng góp','dict-badge dict-badge-contribution');h3.append(badge);}article.append(h3,node('p',r.romanization||'Chưa có phiên âm'),node('p',(r.part_of_speech?r.part_of_speech+' · ':'')+r.vietnamese_meaning));$('dictionary-results').append(article);}if(!d.items.length)$('dictionary-results').append(node('p','Không có kết quả.'));$('more-dictionary').disabled=!d.has_more;}
+$('search-form').addEventListener('submit',e=>{e.preventDefault();state.dictOffset=0;searchDictionary().catch(e=>notice(e.message,true));});$('more-dictionary').addEventListener('click',()=>{state.dictOffset+=20;searchDictionary().catch(e=>notice(e.message,true));});
 $('admin-login').addEventListener('submit',async e=>{e.preventDefault();try{const f=e.currentTarget.elements;const payload=f.token?{token:f.token.value}:{username:f.username?.value,password:f.password?.value};const res=await api('admin/login',payload);if(res.token)localStorage.setItem('tai_admin_token',res.token);e.currentTarget.reset();await refreshSession();await loadAdmin();notice('Đăng nhập thành công (JWT)!');}catch(e){notice(e.message,true);}});
 $('admin-logout').addEventListener('click',async()=>{try{localStorage.removeItem('tai_admin_token');await api('admin/logout',{});await refreshSession();$('admin-results').replaceChildren();}catch(e){notice(e.message,true);}});
 async function loadAdminStats(){try{const res=await api('admin/stats');const bar=$('admin-stats-bar');if(!bar)return;bar.replaceChildren();const titles={sentences:'Câu Tai',translations:'Bản dịch',word_contributions:'Từ đóng góp',sentence_corrections:'Sửa câu gốc',romanization_corrections:'Sửa phiên âm'};for(const[tbl,counts]of Object.entries(res.stats||{})){const card=node('div',undefined,'stat-card');card.append(node('strong',titles[tbl]||tbl));const countsDiv=node('div',undefined,'stat-counts');const pSpan=node('span',`Chờ: ${counts.pending||0} `,'pending');const aSpan=node('span',`· Duyệt: ${counts.approved||0}`,'approved');countsDiv.append(pSpan,aSpan);card.append(countsDiv);bar.append(card);}}catch(e){}}
@@ -210,4 +211,15 @@ async function loadAdmin(){await loadAdminStats();const table=$('admin-table').v
 $('admin-load').addEventListener('click',()=>{state.adminOffset=0;loadAdmin().catch(e=>notice(e.message,true));});$('admin-more').addEventListener('click',()=>{state.adminOffset+=30;loadAdmin().catch(e=>notice(e.message,true));});
 $('btn-export-json')?.addEventListener('click',()=>{const t=$('export-table')?.value||'all',s=$('export-status')?.value||'approved';window.location.href=`/api/admin/export?format=json&table=${t}&status=${s}`;});
 $('btn-export-csv')?.addEventListener('click',()=>{const t=$('export-table')?.value||'all',s=$('export-status')?.value||'approved';window.location.href=`/api/admin/export?format=csv&table=${t}&status=${s}&bom=true`;});
-refreshSession().then(()=>{const tab=location.hash.slice(1);return openTab(['words','sentences','translate','review','dictionary','about','admin'].includes(tab)?tab:'words');}).catch(e=>notice('Không kết nối được ứng dụng: '+e.message,true));
+const memberUI=accountUI({api,node,state,refreshSession,openTab});
+refreshSession().then(()=>{const tab=location.hash.slice(1).split('?')[0];return openTab(['words','sentences','translate','review','dictionary','about','admin','account','leaderboard','reset-password'].includes(tab)?tab:'words');}).catch(e=>notice('Không kết nối được ứng dụng: '+e.message,true));
+
+for(const prefix of ['trans','review']) {
+  const bar=$(prefix+'-filter-bar');
+  const reset=node('button','Đặt lại','filter-reset');reset.type='button';
+  reset.addEventListener('click',()=>{
+    bar.querySelectorAll('select').forEach(select=>select.selectedIndex=0);
+    $(prefix+'-filter-apply').click();
+  });
+  bar.append(reset);
+}

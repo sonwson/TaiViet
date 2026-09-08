@@ -203,6 +203,9 @@ else:
         initial_count=db.execute('SELECT count(*) FROM word_senses').fetchone()[0]
         print(f"[+] Đã kết nối Supabase Cloud. Số bản ghi word_senses hiện có: {initial_count:,}")
 
+from accounts import Accounts, resend_ready
+accounts = Accounts(sys.modules[__name__])
+
 
 def get_client_ip(request:Request)->str:
     xff=request.headers.get('x-forwarded-for')
@@ -266,6 +269,10 @@ async def local_guard(request:Request,call_next):
 
 def session(request):
     admin_claims=get_admin_jwt_claims(request)
+    user=accounts.user(request)
+    if user:
+        is_adm=bool(admin_claims or user.get('role')=='admin')
+        return {**user,'admin':is_adm,'expires':time.time()+86400}
     token=request.cookies.get('tai_session')
     s=sessions.get(token)
     if not s or s['expires']<time.time():
@@ -281,6 +288,9 @@ def admin(request):
     admin_claims=get_admin_jwt_claims(request)
     if admin_claims:
         return {'id':admin_claims.get('sub'),'username':admin_claims.get('username'),'admin':True}
+    user=accounts.user(request)
+    if user and user.get('role')=='admin':
+        return {'id':user['id'],'username':user.get('display_name') or 'Admin','admin':True}
     s=session(request)
     if not s.get('admin'): raise HTTPException(403,'Chỉ quản trị viên được thực hiện thao tác này.')
     return s
@@ -338,6 +348,11 @@ def approved(db,table,id):
 
 @app.get('/api/session')
 def get_session(request:Request):
+    user=accounts.user(request)
+    if user:
+        is_adm=bool(user.get('role')=='admin' or get_admin_jwt_claims(request))
+        return {'contributor_id':user['id'],'user':user,'admin':is_adm,
+                'consent_version':CONSENT,'mode':DB_BACKEND,'password_reset_available':resend_ready()}
     now=time.time()
     for key in [k for k,v in sessions.items() if v['expires']<now]: sessions.pop(key,None)
     token=request.cookies.get('tai_session'); s=sessions.get(token)
@@ -347,8 +362,8 @@ def get_session(request:Request):
     admin_claims=get_admin_jwt_claims(request)
     is_admin=bool(admin_claims or s.get('admin'))
     if is_admin: s['admin']=True
-    response=JSONResponse({'contributor_id':s['id'],'admin':is_admin,
-                           'consent_version':CONSENT,'mode':DB_BACKEND})
+    response=JSONResponse({'contributor_id':s['id'],'admin':is_admin,'user':None,
+                           'consent_version':CONSENT,'mode':DB_BACKEND,'password_reset_available':resend_ready()})
     is_https = request.url.scheme=='https' or request.headers.get('x-forwarded-proto')=='https'
     response.set_cookie('tai_session',token,httponly=True,samesite='lax',secure=is_https,max_age=86400)
     return response
@@ -725,59 +740,28 @@ def dictionary(q:str='',offset:int=0):
     if len(q)>120 or offset<0: raise HTTPException(422,'Bộ lọc không hợp lệ.')
     q_clean=q.strip()
     with database() as db:
-        keys=engine.canonical_keys(q_clean) if q_clean else []
-        placeholders=','.join('?' for _ in keys) or 'NULL'
         pattern='%'+q_clean+'%'
-        lex_rows=db.execute('''SELECT l.id,l.tai_text_original,l.romanization,w.id sense_id,w.vietnamese_meaning,w.part_of_speech,'word' as kind
-        FROM lexemes l JOIN word_senses w ON w.lexeme_id=l.id WHERE l.status='approved' AND w.status='approved'
-        AND (l.tai_text_original LIKE ? OR LOWER(l.romanization) LIKE LOWER(?) OR LOWER(w.vietnamese_meaning) LIKE LOWER(?) OR EXISTS
-        (SELECT 1 FROM lexeme_search_keys sk WHERE sk.lexeme_id=l.id AND sk.rule_version=? AND sk.canonical_key IN ('''+placeholders+'''))) ORDER BY l.id,w.id LIMIT 25 OFFSET ?''',
-        (pattern,pattern,pattern,engine.version,*keys,offset)).fetchall()
-
-        contrib_rows=[]
-        if offset==0 or len(lex_rows)<25:
-            contrib_rows=db.execute('''SELECT wc.id,
-                coalesce(wc.tai_text_final, wc.tai_text_original) as tai_text_original,
-                coalesce(wc.romanization_final, wc.romanization_original) as romanization,
-                wc.id as sense_id, wc.vietnamese_meaning, 'Từ đóng góp' as part_of_speech, 'contribution' as kind
-            FROM word_contributions wc
-            WHERE wc.status='approved'
-            AND (coalesce(wc.tai_text_final, wc.tai_text_original) LIKE ?
-                 OR LOWER(coalesce(wc.romanization_final, wc.romanization_original)) LIKE LOWER(?)
-                 OR LOWER(wc.vietnamese_meaning) LIKE LOWER(?))
-            ORDER BY wc.created_at DESC LIMIT 10 OFFSET ?''',
-            (pattern,pattern,pattern,offset)).fetchall()
-
-        sent_rows=db.execute('''SELECT s.id, s.tai_text_original, s.romanization,
-            t.id as sense_id, t.vietnamese_text as vietnamese_meaning, 'Câu đã duyệt' as part_of_speech, 'sentence' as kind
-        FROM sentences s
-        JOIN translations t ON t.sentence_id = s.id
-        WHERE s.status='approved' AND t.status='approved'
-        AND (s.tai_text_original LIKE ? OR LOWER(s.romanization) LIKE LOWER(?) OR LOWER(t.vietnamese_text) LIKE LOWER(?))
-        ORDER BY s.id LIMIT 20 OFFSET ?''',
+        contrib_rows=db.execute('''SELECT wc.id,
+            coalesce(wc.tai_text_final, wc.tai_text_original) as tai_text_original,
+            coalesce(wc.romanization_final, wc.romanization_original) as romanization,
+            wc.id as sense_id, wc.vietnamese_meaning, 'Từ đóng góp' as part_of_speech, 'contribution' as kind
+        FROM word_contributions wc
+        WHERE wc.status='approved'
+        AND (coalesce(wc.tai_text_final, wc.tai_text_original) LIKE ?
+             OR LOWER(coalesce(wc.romanization_final, wc.romanization_original)) LIKE LOWER(?)
+             OR LOWER(wc.vietnamese_meaning) LIKE LOWER(?))
+        ORDER BY wc.created_at DESC, wc.id DESC LIMIT 21 OFFSET ?''',
         (pattern,pattern,pattern,offset)).fetchall()
 
-        processed_sents=[]
-        for sr in sent_rows:
-            sd=dict(sr)
-            if not (sd.get('romanization') and sd['romanization'].strip()):
-                tai_txt=sd.get('tai_text_original') or ''
-                if tai_txt.strip():
-                    gen=engine.tai_sentence_to_romanization(tai_txt,dictionary=True)
-                    cands=gen.get('candidates',[]) or gen.get('dictionary_candidates',[])
-                    if cands: sd['romanization']=cands[0]['romanization']
-                    else:
-                        parts=[]
-                        for t in gen.get('tokens',[]):
-                            if t.get('kind')=='word':
-                                tc=t.get('candidates',[]) or t.get('dictionary_candidates',[])
-                                parts.append(tc[0]['romanization'] if tc else t['text'])
-                            else: parts.append(t['text'])
-                        sd['romanization']="".join(parts) if parts else 'Chưa có phiên âm'
-            processed_sents.append(sd)
-
-        all_items=[dict(r) for r in lex_rows]+[dict(r) for r in contrib_rows]+processed_sents
-    return {'items':all_items}
+        all_items=[]
+        for r in contrib_rows:
+            item=dict(r)
+            if not (item.get('tai_text_original') and item['tai_text_original'].strip()) and item.get('romanization'):
+                gen=engine.romanization_to_tai(item['romanization'].strip())
+                cands=gen.get('candidates',[]) or gen.get('dictionary_candidates',[])
+                if cands: item['tai_text_original']=cands[0]['tai']
+            all_items.append(item)
+    return {'items':all_items[:20], 'has_more': len(all_items) > 20}
 
 
 @app.get('/api/words/meanings')
@@ -1055,6 +1039,8 @@ def export(request:Request,format:str='json',table:str='all',status:str='all',bo
 def health():
     with database() as db: count=db.execute('SELECT count(*) FROM word_senses').fetchone()[0]
     return {'ok':True,'mode':DB_BACKEND,'senses':count,'rule_version':engine.version}
+
+accounts.install()
 
 app.mount('/static',StaticFiles(directory=ROOT/'web'),name='static')
 @app.get('/favicon.ico')

@@ -7,6 +7,7 @@ ROOT=Path(__file__).resolve().parents[1]
 def main():
     sql=(ROOT/'database/local.sql').read_text(encoding='utf-8').split('CREATE TRIGGER')[0]
     sql+='\n'+(ROOT/'database/extensions.sql').read_text(encoding='utf-8')
+    sql+='\n'+(ROOT/'database/accounts.sql').read_text(encoding='utf-8')
     sql=sql.replace('PRAGMA foreign_keys = ON;','BEGIN;')
     sql=re.sub(r'\b(id|lexeme_id|source_record_id|sentence_id|translation_id|word_sense_id|contributor_id|user_id|admin_id|entity_id) TEXT',r'\1 UUID',sql)
     sql=re.sub(r'\b(payload|raw_analysis|annotation_data|value_sources|generated_suggestions|analysis) TEXT',r'\1 JSONB',sql)

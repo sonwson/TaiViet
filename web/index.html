@@ -7,6 +7,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon.png">
   <link rel="shortcut icon" href="/favicon.ico">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <link rel="preload" href="/static/fonts/RobotoSlab-Variable.ttf" as="font" type="font/ttf" crossorigin>
   <link rel="stylesheet" href="/static/style.css">
   <script type="module" src="/static/app.js"></script>
 </head>
@@ -28,8 +29,10 @@
   <button data-tab="translate">Dịch</button>
   <button data-tab="review">Kiểm tra</button>
   <button data-tab="dictionary">Tra cứu</button>
+  <button data-tab="leaderboard">Xếp hạng</button>
   <button data-tab="about">Giới thiệu</button>
-  <button data-tab="admin">Quản trị</button>
+  <button data-tab="account" id="account-nav" class="nav-account-btn">Tài khoản</button>
+  <button data-tab="admin" id="admin-nav" class="nav-admin-btn" hidden><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#shield"></use></svg> Quản trị</button>
 </nav>
 
 <!-- ===== Main Content ===== -->
@@ -216,6 +219,7 @@
   <!-- Tra cứu -->
   <section id="dictionary" class="panel" hidden>
     <h1>Tra cứu từ điển</h1>
+    <p class="intro">Những từ do cộng đồng đóng góp và đã được quản trị viên duyệt.</p>
     <form id="search-form" class="search">
       <label>Tìm chữ Tai, phiên âm hoặc nghĩa
         <input name="q" maxlength="120" placeholder="Tìm một từ…">
@@ -226,13 +230,215 @@
     <button id="more-dictionary" class="secondary">Trang tiếp</button>
   </section>
 
+  <section id="account" class="panel" hidden>
+    <div class="eyebrow">DẤU ẤN CỦA BẠN</div>
+    <h1>Mỗi đóng góp đều được ghi nhận.</h1>
+    <div id="account-guest" class="account-layout">
+      <div class="account-story">
+        <span class="account-symbol tai" aria-hidden="true">ꪼꪕ</span>
+        <h2>Cùng gìn giữ tiếng Tai</h2>
+        <p>Lưu lại từ, câu bạn đã góp và theo dõi hành trình từ chờ duyệt đến kho ngôn ngữ chung.</p>
+        <ul><li>Xem đóng góp trên mọi thiết bị</li><li>Theo dõi kết quả kiểm duyệt</li><li>Ghi tên trên bảng xếp hạng cộng đồng</li></ul>
+        <p class="hint">Đóng góp trong phiên khách hiện tại sẽ được gắn vào tài khoản khi bạn đăng nhập hoặc đăng ký.</p>
+      </div>
+      <div class="account-card">
+        <div class="account-switch" aria-label="Tài khoản">
+          <button type="button" data-auth-mode="login" aria-pressed="true">Đăng nhập</button>
+          <button type="button" data-auth-mode="register" aria-pressed="false">Đăng ký</button>
+        </div>
+        <form id="member-login">
+          <label>Email<input name="email" type="email" autocomplete="username" maxlength="254" required placeholder="ban@example.com"></label>
+          <label>Mật khẩu<input name="password" type="password" autocomplete="current-password" maxlength="128" required></label>
+          <button type="submit">Đăng nhập</button>
+          <button type="button" class="text-button" data-auth-mode="forgot">Quên mật khẩu?</button>
+        </form>
+        <form id="member-register" hidden>
+          <label>Email<input name="email" type="email" autocomplete="username" maxlength="254" required placeholder="ban@example.com"></label>
+          <label>Mật khẩu<input name="password" type="password" autocomplete="new-password" minlength="10" maxlength="128" required aria-describedby="password-help"></label>
+          <p id="password-help" class="hint">Từ 10 đến 128 ký tự. Nên dùng một cụm từ dễ nhớ với riêng bạn.</p>
+          <label>Tên hiển thị (không bắt buộc)<input name="display_name" autocomplete="nickname" maxlength="60" placeholder="Tên bạn muốn cộng đồng biết đến"></label>
+          <p class="hint">Tên hiển thị xuất hiện trên bảng xếp hạng. Email luôn được giữ riêng tư. Bỏ trống để dùng tên thành viên tự động.</p>
+          <button type="submit">Tạo tài khoản</button>
+        </form>
+        <form id="member-forgot" hidden>
+          <h2>Lấy lại mật khẩu</h2>
+          <p>Nhập email đã đăng ký để nhận liên kết đặt lại mật khẩu.</p>
+          <label>Email<input name="email" type="email" autocomplete="email" maxlength="254" required></label>
+          <button type="submit">Gửi liên kết khôi phục</button>
+          <button type="button" class="text-button" data-auth-mode="login">Quay lại đăng nhập</button>
+        </form>
+        <p id="account-message" role="status" aria-live="polite"></p>
+      </div>
+    </div>
+    <div id="account-member" hidden>
+      <!-- Profile Header -->
+      <div class="member-profile-header">
+        <div class="member-avatar-col">
+          <div id="member-avatar" class="member-avatar" aria-hidden="true">TV</div>
+        </div>
+        <div class="member-info-col">
+          <div class="member-title-row">
+            <h2 id="member-name">Thành viên</h2>
+            <span id="member-role-badge" class="role-badge role-user">Thành viên</span>
+          </div>
+          <p id="member-email" class="member-email-text"></p>
+          <p id="member-joined" class="member-joined-text hint"></p>
+        </div>
+        <div class="member-actions-col">
+          <button id="member-logout" class="secondary btn-logout-member" type="button">Đăng xuất ⎋</button>
+        </div>
+      </div>
+
+      <!-- Admin Quick Access Banner -->
+      <div id="member-admin-banner" class="admin-quick-banner" hidden>
+        <div class="admin-banner-content">
+          <span class="admin-banner-icon" aria-hidden="true"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#shield"></use></svg></span>
+          <div>
+            <strong>Bạn đang đăng nhập với quyền Quản trị viên</strong>
+            <p>Truy cập bảng điều khiển để duyệt từ, câu, bản dịch và quản lý kho ngữ liệu Tai Việt.</p>
+          </div>
+        </div>
+        <button id="btn-goto-admin" class="btn-admin-cta" type="button">Mở Bảng Quản trị ➔</button>
+      </div>
+
+      <!-- Sub Navigation Tabs -->
+      <div class="account-subnav" role="tablist" aria-label="Mục cá nhân">
+        <button type="button" class="subtab-btn" data-subtab="contributions" aria-selected="true">
+          <span><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#activity"></use></svg></span> Hoạt động & Đóng góp
+        </button>
+        <button type="button" class="subtab-btn" data-subtab="settings" aria-selected="false">
+          <span><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#settings"></use></svg></span> Cài đặt tài khoản
+        </button>
+      </div>
+
+      <!-- Subpanel 1: Contributions & Stats -->
+      <div id="subpanel-contributions" class="account-subpanel">
+        <div class="section-title-row">
+          <h3>Thống kê đóng góp của tôi</h3>
+          <span id="member-rank-badge" class="member-rank-tag" hidden>Hạng #1</span>
+        </div>
+        <div id="member-counts" class="member-counts" aria-label="Thống kê đóng góp"></div>
+        <div id="member-detail-stats" class="member-detail-grid"></div>
+
+        <div class="section-title-row contributions-header">
+          <h3>Lịch sử đóng góp</h3>
+        </div>
+        <form id="member-filters" class="filter-bar">
+          <div class="filter-group">
+            <label for="member-kind">Loại đóng góp</label>
+            <select id="member-kind" name="kind">
+              <option value="all">Từ và câu</option>
+              <option value="word">Từ đóng góp</option>
+              <option value="sentence">Câu đóng góp</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label for="member-status">Trạng thái</label>
+            <select id="member-status" name="status">
+              <option value="all">Tất cả trạng thái</option>
+              <option value="pending">Chờ duyệt</option>
+              <option value="approved">Đã duyệt</option>
+              <option value="rejected">Từ chối</option>
+            </select>
+          </div>
+          <button type="submit" class="btn-filter">Áp dụng</button>
+          <button type="reset" class="filter-reset">Đặt lại</button>
+        </form>
+        <div id="member-contributions" aria-live="polite"></div>
+        <button id="member-more" class="secondary" type="button" hidden>Xem thêm đóng góp</button>
+      </div>
+
+      <!-- Subpanel 2: Account Settings (Rename 7-day, Password 3-day) -->
+      <div id="subpanel-settings" class="account-subpanel" hidden>
+        <div class="settings-grid">
+          <!-- Card: Rename (7-day rule) -->
+          <div class="settings-card">
+            <div class="settings-card-header">
+              <span class="settings-icon"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#user"></use></svg></span>
+              <div>
+                <h3>Đổi tên hiển thị</h3>
+                <p class="hint">Tên hiển thị xuất hiện trên bảng xếp hạng và các đóng góp công khai. Email luôn được giữ riêng tư.</p>
+              </div>
+            </div>
+            
+            <div id="rename-cooldown-box" class="cooldown-box">
+              <span class="cooldown-indicator"></span>
+              <div id="rename-cooldown-text">Đang kiểm tra thời gian đổi tên…</div>
+            </div>
+
+            <form id="form-change-name">
+              <label for="input-new-name">Tên hiển thị mới
+                <input id="input-new-name" name="display_name" maxlength="60" minlength="2" required placeholder="Nhập tên bạn muốn hiển thị">
+              </label>
+              <p class="rule-hint">ℹ Quy tắc: Chỉ có thể đổi tên hiển thị <strong>7 ngày một lần</strong>.</p>
+              <button type="submit" id="btn-submit-rename">Lưu tên hiển thị</button>
+            </form>
+            <p id="rename-message" class="setting-feedback" role="status" aria-live="polite"></p>
+          </div>
+
+          <!-- Card: Change Password (3-day rule) -->
+          <div class="settings-card">
+            <div class="settings-card-header">
+              <span class="settings-icon"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="/static/icons.svg#lock"></use></svg></span>
+              <div>
+                <h3>Đổi mật khẩu</h3>
+                <p class="hint">Bảo vệ tài khoản với mật khẩu mạnh gồm từ 10 đến 128 ký tự.</p>
+              </div>
+            </div>
+
+            <div id="password-cooldown-box" class="cooldown-box">
+              <span class="cooldown-indicator"></span>
+              <div id="password-cooldown-text">Đang kiểm tra thời gian đổi mật khẩu…</div>
+            </div>
+
+            <form id="form-change-password">
+              <label for="input-current-pass">Mật khẩu hiện tại
+                <input id="input-current-pass" name="current_password" type="password" autocomplete="current-password" required placeholder="Nhập mật khẩu hiện tại">
+              </label>
+              <label for="input-new-pass">Mật khẩu mới
+                <input id="input-new-pass" name="new_password" type="password" autocomplete="new-password" minlength="10" maxlength="128" required placeholder="Từ 10 ký tự trở lên">
+              </label>
+              <label for="input-confirm-pass">Xác nhận mật khẩu mới
+                <input id="input-confirm-pass" name="confirm_password" type="password" autocomplete="new-password" minlength="10" maxlength="128" required placeholder="Nhập lại mật khẩu mới">
+              </label>
+              <p class="rule-hint">ℹ Quy tắc: Chỉ có thể đổi mật khẩu <strong>3 ngày một lần</strong>.</p>
+              <button type="submit" id="btn-submit-password">Lưu mật khẩu mới</button>
+            </form>
+            <p id="password-message" class="setting-feedback" role="status" aria-live="polite"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="reset-password" class="panel" hidden>
+    <div class="eyebrow">TÀI KHOẢN TAI VIỆT</div><h1>Đặt mật khẩu mới</h1>
+    <p class="intro">Liên kết có hiệu lực trong 30 phút và chỉ dùng được một lần.</p>
+    <form id="member-reset" class="account-card reset-card">
+      <label>Mật khẩu mới<input name="password" type="password" autocomplete="new-password" minlength="10" maxlength="128" required></label>
+      <label>Nhập lại mật khẩu<input name="confirm" type="password" autocomplete="new-password" minlength="10" maxlength="128" required></label>
+      <button type="submit">Lưu mật khẩu mới</button>
+      <p id="reset-message" role="status" aria-live="polite"></p>
+      <button type="button" class="text-button" id="reset-request-new">Yêu cầu liên kết mới</button>
+    </form>
+  </section>
+
+  <section id="leaderboard" class="panel" hidden>
+    <div class="eyebrow">CỘNG ĐỒNG TAI VIỆT</div>
+    <h1>Những người làm giàu kho tiếng Tai.</h1>
+    <p class="intro">Mỗi từ hoặc câu đã duyệt là một đóng góp được ghi nhận. Cảm ơn bạn đã cùng gìn giữ ngôn ngữ.</p>
+    <div class="ranking-note"><span class="status-badge status-approved">Chỉ tính đã duyệt</span><span>Top 50 thành viên · Tổng đóng góp từ trước đến nay</span></div>
+    <div id="leaderboard-results" aria-live="polite"></div>
+    <p class="hint">Một từ hoặc một câu = 1 điểm. Câu và bản ghi nguồn gốc của câu chỉ được tính một lần. Các thành viên cùng điểm có cùng hạng.</p>
+  </section>
+
   <!-- Giới thiệu -->
   <section id="about" class="panel prose" hidden>
     <div class="eyebrow">TAI.VIET.TRANS_PROJECT</div>
     <h1>Một kho dữ liệu, nhiều tiếng nói.</h1>
     <p>Dự án tập hợp chữ Tai, phiên âm, nghĩa và câu nói để xây dựng tài nguyên ngôn ngữ và phục vụ nghiên cứu NLP.</p>
     <h2>Bạn có thể góp gì?</h2>
-    <p>Một từ quen thuộc, một câu trong hội thoại, một bản dịch hoặc một lượt kiểm tra đều giúp kho dữ liệu phong phú hơn. Người đóng góp không cần đăng ký tài khoản.</p>
+    <p>Một từ quen thuộc, một câu trong hội thoại, một bản dịch hoặc một lượt kiểm tra đều giúp kho dữ liệu phong phú hơn. Bạn có thể đóng góp với tư cách khách; đăng ký tài khoản để theo dõi từ và câu đã góp trên mọi thiết bị.</p>
     <h2>Nguyên văn luôn được giữ lại</h2>
     <p>Gợi ý của hệ thống có thể chưa đúng. Dữ liệu bạn nhập và gợi ý được lưu riêng; đóng góp mới sẽ chờ quản trị viên duyệt.</p>
     <h2>Quyền sử dụng dữ liệu</h2>
